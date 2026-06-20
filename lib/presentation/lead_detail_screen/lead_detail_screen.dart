@@ -33,6 +33,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
   bool _isEditingStatus = false;
   String? _origin;
   String? _returnTo;
+  String? _returnBucket;
   StreamSubscription? _leadSub;
   StreamSubscription? _notesSub;
 
@@ -94,6 +95,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         _leadId = args['leadId'] as String?;
         _origin = args['origin'] as String?;
         _returnTo = args['returnTo'] as String?;
+        _returnBucket = args['returnBucket'] as String?;
       } else if (args is String) {
         _leadId = args;
       }
@@ -410,7 +412,14 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
 
     void goBack() {
       if (_returnTo == 'Dashboard') {
-        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.dashboardScreen, (route) => false);
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          AppRoutes.dashboardScreen,
+          (route) => false,
+          arguments: {
+            'expandBucket': _returnBucket,
+          },
+        );
       } else if (_origin == AppRoutes.siteVisitsScreen) {
         Navigator.pushNamedAndRemoveUntil(context, AppRoutes.siteVisitsScreen, (route) => false);
       } else {

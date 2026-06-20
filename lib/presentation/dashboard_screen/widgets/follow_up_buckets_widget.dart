@@ -3,13 +3,15 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../routes/app_routes.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/custom_icon_widget.dart';
+import '../../../utils/lead_source_assets.dart';
 
 class FollowUpBucketsWidget extends StatefulWidget {
   final List<Map<String, dynamic>> todayLeads;
   final List<Map<String, dynamic>> tomorrowLeads;
   final List<Map<String, dynamic>> dueLeads;
   final List<Map<String, dynamic>> overdueLeads;
-  final void Function(Map<String, dynamic>) onCallNow;
+  final void Function(Map<String, dynamic>, String) onCallNow;
+  final String? initialBucket;
 
   const FollowUpBucketsWidget({
     super.key,
@@ -18,6 +20,7 @@ class FollowUpBucketsWidget extends StatefulWidget {
     required this.dueLeads,
     required this.overdueLeads,
     required this.onCallNow,
+    this.initialBucket,
   });
 
   @override
@@ -25,7 +28,42 @@ class FollowUpBucketsWidget extends StatefulWidget {
 }
 
 class _FollowUpBucketsWidgetState extends State<FollowUpBucketsWidget> {
-  int _selectedIndex = 2;
+  late int _selectedIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedIndex = _getBucketIndex(widget.initialBucket) ?? 2;
+  }
+
+  @override
+  void didUpdateWidget(covariant FollowUpBucketsWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialBucket != oldWidget.initialBucket && widget.initialBucket != null) {
+      final index = _getBucketIndex(widget.initialBucket);
+      if (index != null) {
+        setState(() {
+          _selectedIndex = index;
+        });
+      }
+    }
+  }
+
+  int? _getBucketIndex(String? bucket) {
+    if (bucket == null) return null;
+    switch (bucket.toLowerCase()) {
+      case 'overdue':
+        return 0;
+      case 'due':
+        return 1;
+      case 'today':
+        return 2;
+      case 'tomorrow':
+        return 3;
+      default:
+        return null;
+    }
+  }
 
   List<_BucketData> get _buckets => [
     _BucketData(
@@ -284,7 +322,7 @@ class _BucketTile extends StatelessWidget {
 
 class _BucketPanel extends StatelessWidget {
   final _BucketData bucket;
-  final void Function(Map<String, dynamic>) onCallNow;
+  final void Function(Map<String, dynamic>, String) onCallNow;
 
   const _BucketPanel({
     super.key,
@@ -398,7 +436,9 @@ class _BucketPanel extends StatelessWidget {
                     return _LeadRow(
                       lead: lead,
                       color: bucket.color,
-                      onCallNow: () => onCallNow(lead),
+                      isToday: bucket.title == 'Today',
+                      bucketTitle: bucket.title,
+                      onCallNow: () => onCallNow(lead, bucket.title),
                     );
                   },
                 ),
@@ -411,25 +451,120 @@ class _BucketPanel extends StatelessWidget {
 class _LeadRow extends StatelessWidget {
   final Map<String, dynamic> lead;
   final Color color;
+  final bool isToday;
+  final String bucketTitle;
   final VoidCallback onCallNow;
 
   const _LeadRow({
     required this.lead,
     required this.color,
+    required this.isToday,
+    required this.bucketTitle,
     required this.onCallNow,
   });
+
+  String _formatStatus(String status) {
+    switch (status.toLowerCase()) {
+      case 'new':
+        return 'New';
+      case 'called':
+        return 'Called';
+      case 'follow-up':
+        return 'Follow-Up';
+      case 'site visit':
+      case 'site visit scheduled':
+      case 'site visit done':
+        return 'Site Visit';
+      case 'won':
+        return 'Won';
+      case 'lost/dead':
+        return 'Lost/Dead';
+      case 'lost':
+        return 'Lost';
+      case 'dead':
+        return 'Dead';
+      default:
+        if (status.isEmpty) return 'New';
+        return status[0].toUpperCase() + status.substring(1);
+    }
+  }
+
+  Color _getStatusTextColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'new':
+        return const Color(0xFF6B7280);
+      case 'called':
+        return const Color(0xFF185FA5);
+      case 'follow-up':
+        return const Color(0xFF7C3AED);
+      case 'site visit':
+      case 'site visit scheduled':
+      case 'site visit done':
+        return const Color(0xFF6A4FB5);
+      case 'won':
+        return const Color(0xFF28A745);
+      case 'lost/dead':
+      case 'lost':
+      case 'dead':
+        return const Color(0xFFE05252);
+      default:
+        return const Color(0xFF6B7280);
+    }
+  }
+
+  Color _getStatusBgColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'new':
+        return const Color(0xFFF3F4F6);
+      case 'called':
+        return const Color(0xFFE8F1FA);
+      case 'follow-up':
+        return const Color(0xFFF3E8FF);
+      case 'site visit':
+      case 'site visit scheduled':
+      case 'site visit done':
+        return const Color(0xFFF0ECFC);
+      case 'won':
+        return const Color(0xFFE8F5E9);
+      case 'lost/dead':
+      case 'lost':
+      case 'dead':
+        return const Color(0xFFFFEBEE);
+      default:
+        return const Color(0xFFF3F4F6);
+    }
+  }
+
+  Color _getStatusBorderColor(String status, Color textColor) {
+    switch (status.toLowerCase()) {
+      case 'new':
+        return const Color(0xFFD1D5DB);
+      default:
+        return textColor;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final name = lead['clientName'] as String? ?? '';
     final property = lead['property'] as String? ?? '';
     final tag = lead['lastTag'] as String? ?? '';
+    final leadSource = lead['leadSource'] as String? ?? '';
+
+    Widget? leadSourceWidget;
+    if (leadSource.isNotEmpty) {
+      leadSourceWidget = LeadSourceIconBadge(leadSource: leadSource);
+    }
 
     return InkWell(
       onTap: () => Navigator.pushNamed(
         context,
         AppRoutes.leadDetailScreen,
-        arguments: lead['id'] as String,
+        arguments: {
+          'leadId': lead['id'] as String,
+          'returnTo': 'Dashboard',
+          'returnBucket': bucketTitle,
+        },
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
@@ -470,13 +605,50 @@ class _LeadRow extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (leadSourceWidget != null) ...[
+                          const SizedBox(width: 6),
+                          leadSourceWidget,
+                        ],
                       ],
                     ),
                   ],
-                  if (tag.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    _TagChip(tag: tag),
-                  ],
+                  const SizedBox(height: 6),
+                  Builder(
+                    builder: (context) {
+                      final status = lead['status'] as String? ?? 'New';
+                      final displayStatus = _formatStatus(status);
+                      final statusColor = _getStatusTextColor(status);
+                      final statusBg = _getStatusBgColor(status);
+                      final statusBorder = _getStatusBorderColor(status, statusColor);
+
+                      final statusWidget = Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: statusBg,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: statusBorder, width: 1),
+                        ),
+                        child: Text(
+                          displayStatus,
+                          style: GoogleFonts.inter(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w600,
+                            color: statusColor,
+                          ),
+                        ),
+                      );
+
+                      return Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          statusWidget,
+                          if (tag.isNotEmpty) _TagChip(tag: tag),
+                        ],
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
@@ -602,6 +774,38 @@ class _TagChip extends StatelessWidget {
           fontWeight: FontWeight.w700,
           color: _color,
         ),
+      ),
+    );
+  }
+}
+
+class LeadSourceIconBadge extends StatelessWidget {
+  final String leadSource;
+
+  const LeadSourceIconBadge({
+    super.key,
+    required this.leadSource,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (leadSource.isEmpty) return const SizedBox.shrink();
+
+    final sourceData = sourceIconMap[leadSource];
+    if (sourceData == null) return const SizedBox.shrink();
+
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: BoxDecoration(
+        color: sourceData.color.withAlpha(25),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      alignment: Alignment.center,
+      child: Icon(
+        sourceData.icon,
+        color: sourceData.color,
+        size: 11,
       ),
     );
   }

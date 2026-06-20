@@ -28,6 +28,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   String? _pendingLeadId;
   String? _pendingSource;
+  String? _pendingReturnBucket;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   List<Map<String, dynamic>> get _leadMaps => _leads.map((l) {
@@ -239,6 +240,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     final dateStr = _formatDate(now);
     final isTablet = MediaQuery.of(context).size.width >= 600;
 
+    final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    final expandBucket = args?['expandBucket'] as String?;
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -354,7 +358,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 horizontal: isTablet ? 24 : 16,
                 vertical: 16,
               ),
-              child: isTablet ? _buildTabletLayout() : _buildPhoneLayout(),
+              child: isTablet ? _buildTabletLayout(expandBucket) : _buildPhoneLayout(expandBucket),
             ),
           ),
         ),
@@ -362,7 +366,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _buildPhoneLayout() {
+  Widget _buildPhoneLayout(String? expandBucket) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -372,6 +376,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           dueLeads: _due,
           overdueLeads: _overdue,
           onCallNow: _onCallNow,
+          initialBucket: expandBucket,
         ),
         const SizedBox(height: 20),
         StatCardsWidget(
@@ -389,7 +394,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _buildTabletLayout() {
+  Widget _buildTabletLayout(String? expandBucket) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -415,6 +420,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             dueLeads: _due,
             overdueLeads: _overdue,
             onCallNow: _onCallNow,
+            initialBucket: expandBucket,
           ),
         ),
       ],
@@ -425,10 +431,12 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _pendingLeadId != null) {
       final leadIdToNavigate = _pendingLeadId!;
+      final returnBucket = _pendingReturnBucket;
       // Clear pending state immediately so we don't trigger navigation twice
       setState(() {
         _pendingLeadId = null;
         _pendingSource = null;
+        _pendingReturnBucket = null;
       });
 
       // Increment callsMade/callsCount in Firestore and check temperature
@@ -443,6 +451,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             arguments: {
               'leadId': leadIdToNavigate,
               'returnTo': 'Dashboard',
+              'returnBucket': returnBucket,
             },
           );
         }
@@ -481,7 +490,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
   }
 
-  Future<void> _onCallNow(Map<String, dynamic> lead) async {
+  Future<void> _onCallNow(Map<String, dynamic> lead, String bucketTitle) async {
     final leadId = lead['id'] as String;
     String? phone = lead['phone'] as String?;
 
@@ -516,6 +525,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           setState(() {
             _pendingLeadId = leadId;
             _pendingSource = 'Dashboard';
+            _pendingReturnBucket = bucketTitle;
           });
         } else {
           debugPrint('Could not launch tel:$normalizedPhone');
