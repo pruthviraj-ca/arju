@@ -1,0 +1,26 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "truassets-crm-akp-web",
+          "appId": "1:948589833895:android:072dc704a4df8f7bcf3582",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "truassets-crm-akp-web",
+          "configurations": {
+            "android": "1:948589833895:android:072dc704a4df8f7bcf3582",
+            "ios": "1:948589833895:ios:bf1a861f3f104671cf3582",
+            "web": "1:948589833895:web:2e3d791e5f05b732cf3582"
+          }
+        }
+      }
+    }
+  }
+}

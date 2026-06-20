@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "948589833895",
+    "project_id": "truassets-crm-akp-web",
+    "storage_bucket": "truassets-crm-akp-web.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:948589833895:android:072dc704a4df8f7bcf3582",
+        "android_client_info": {
+          "package_name": "com.example.truassets"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDuaDq6dapFSse3pIzluDeCWQZi98fZbG0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
