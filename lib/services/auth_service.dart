@@ -6,11 +6,27 @@
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Singleton service that wraps [FirebaseAuth] with a clean API
 /// for authentication operations throughout the app.
 class AuthService {
-  AuthService._();
+  AuthService._() {
+    _auth.authStateChanges().listen((User? user) async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (user != null) {
+          await prefs.setString('auth_login_type', 'firebase');
+        } else {
+          if (!isDemoMode.value) {
+            await prefs.setString('auth_login_type', '');
+          }
+        }
+      } catch (e) {
+        debugPrint('Error in authStateChanges listener: $e');
+      }
+    });
+  }
 
   /// Global singleton instance.
   static final AuthService instance = AuthService._();
@@ -77,8 +93,39 @@ class AuthService {
     return credential.user;
   }
 
+  /// Loads the persisted login state from SharedPreferences on app startup.
+  Future<void> initializeAuth() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final type = prefs.getString('auth_login_type') ?? '';
+      if (type == 'demo') {
+        isDemoMode.value = true;
+      } else {
+        isDemoMode.value = false;
+      }
+    } catch (e) {
+      debugPrint('Error initializing auth state: $e');
+    }
+  }
+
+  /// Sets whether the app is in offline Demo Mode, persisting the preference.
+  Future<void> setDemoMode(bool enabled) async {
+    isDemoMode.value = enabled;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (enabled) {
+        await prefs.setString('auth_login_type', 'demo');
+      } else {
+        await prefs.setString('auth_login_type', '');
+      }
+    } catch (e) {
+      debugPrint('Error setting demo mode: $e');
+    }
+  }
+
   /// Signs out the currently authenticated user.
   Future<void> signOut() async {
+    await setDemoMode(false);
     await _auth.signOut();
   }
 

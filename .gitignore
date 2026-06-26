@@ -46,3 +46,6 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 android/app/.cxx
+
+# Firebase CLI cache
+.firebase/

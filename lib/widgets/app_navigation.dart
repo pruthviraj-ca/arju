@@ -13,6 +13,7 @@ import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../theme/app_theme.dart';
 import './custom_icon_widget.dart';
+import '../presentation/my_leads_screen/my_leads_filter_session.dart';
 
 /// App-wide navigation drawer used as the main navigation mechanism.
 ///
@@ -106,6 +107,12 @@ class AppDrawer extends StatelessWidget {
             onTap: () => _navigate(context, AppRoutes.dashboardScreen),
           ),
           _DrawerItem(
+            iconName: 'assessment',
+            label: 'Reports',
+            isActive: currentRoute == AppRoutes.reportsScreen,
+            onTap: () => _navigate(context, AppRoutes.reportsScreen),
+          ),
+          _DrawerItem(
             iconName: 'people',
             label: 'My Leads',
             isActive: currentRoute == AppRoutes.myLeadsScreen,
@@ -178,6 +185,7 @@ class AppDrawer extends StatelessWidget {
   /// Signs out the user and redirects to the login screen.
   Future<void> _handleLogout(BuildContext context) async {
     Navigator.pop(context);
+    MyLeadsFilterSession.reset();
     await AuthService.instance.signOut();
     if (context.mounted) {
       Navigator.pushNamedAndRemoveUntil(

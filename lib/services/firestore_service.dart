@@ -238,6 +238,54 @@ class FirestoreService {
     await noteRef.set(note.toMap());
   }
 
+  /// Logs a temperature change for a lead as an auto-log NoteModel in the notes sub-collection.
+  Future<void> logTemperatureChange({
+    required String leadId,
+    required String clientName,
+    required String oldTemp,
+    required String newTemp,
+  }) async {
+    if (oldTemp == newTemp) return;
+
+    String tag = '';
+    String text = '';
+
+    if (newTemp == 'Cold') {
+      tag = 'Temp: Cold';
+      text = '$clientName temperature set to Cold';
+    } else if (newTemp == 'Warm') {
+      tag = 'Temp: Warm';
+      text = oldTemp == 'Hot'
+          ? '$clientName temperature changed to Warm'
+          : '$clientName temperature set to Warm';
+    } else if (newTemp == 'Hot') {
+      tag = 'Temp: Hot';
+      text = '$clientName temperature changed to Hot';
+    } else if (newTemp.isEmpty || newTemp == 'none') {
+      tag = 'Temp: Cleared';
+      text = '$clientName temperature tag removed';
+    } else {
+      return;
+    }
+
+    final now = DateTime.now();
+    final createdAt =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    final autoNote = NoteModel(
+      id: '',
+      text: text,
+      tag: tag,
+      callDuration: '',
+      createdAt: createdAt,
+      isAutoLog: true,
+    );
+
+    await addNote(leadId, autoNote);
+  }
+
+
   // ─── Site Visits ──────────────────────────────────────────────────────────
 
   /// Streams all site visits for the current user, ordered by visit date.

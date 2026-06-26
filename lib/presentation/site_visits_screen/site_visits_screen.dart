@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_export.dart';
@@ -64,6 +65,50 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
     super.dispose();
   }
 
+  DateTime _parseDateTime(String dateStr, String timeStr) {
+    if (dateStr.isEmpty || dateStr == 'none') {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+    try {
+      final dateParts = dateStr.split('-');
+      if (dateParts.length != 3) {
+        return DateTime.fromMillisecondsSinceEpoch(0);
+      }
+      final year = int.parse(dateParts[0]);
+      final month = int.parse(dateParts[1]);
+      final day = int.parse(dateParts[2]);
+
+      if (timeStr.isEmpty || timeStr.toLowerCase() == 'none' || !timeStr.contains(RegExp(r'[0-9]'))) {
+        return DateTime(year, month, day);
+      }
+
+      final cleanTime = timeStr.trim().toUpperCase();
+      final isPm = cleanTime.contains('PM');
+      final isAm = cleanTime.contains('AM');
+      final timeOnly = cleanTime.replaceAll('PM', '').replaceAll('AM', '').trim();
+      final timeParts = timeOnly.split(':');
+      if (timeParts.length < 2) {
+        return DateTime(year, month, day);
+      }
+      var hour = int.parse(timeParts[0]);
+      final minute = int.parse(timeParts[1]);
+
+      if (isPm && hour != 12) {
+        hour += 12;
+      } else if (isAm && hour == 12) {
+        hour = 0;
+      }
+
+      return DateTime(year, month, day, hour, minute);
+    } catch (_) {
+      try {
+        return DateTime.parse(dateStr);
+      } catch (_) {
+        return DateTime.fromMillisecondsSinceEpoch(0);
+      }
+    }
+  }
+
   List<SiteVisitModel> get _filteredVisits {
     var result = List<SiteVisitModel>.from(_allVisits);
 
@@ -93,8 +138,12 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
       }).toList();
     }
 
-    // Sort visits by date (upcoming/newest first)
-    result.sort((a, b) => b.visitDate.compareTo(a.visitDate));
+    // Sort visits by combined date + time descending (latest first)
+    result.sort((a, b) {
+      final dateTimeA = _parseDateTime(a.visitDate, a.visitTime);
+      final dateTimeB = _parseDateTime(b.visitDate, b.visitTime);
+      return dateTimeB.compareTo(dateTimeA);
+    });
 
     return result;
   }
@@ -173,18 +222,49 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
     if (confirmed != true) return;
 
     try {
+      final leadSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(FirestoreService.instance.currentUid)
+          .collection('leads')
+          .doc(leadId)
+          .get();
+
+      String currentTemp = '';
+      if (leadSnap.exists) {
+        currentTemp = leadSnap.data()?['leadTemperature'] as String? ?? '';
+      }
+
+      String targetTemp = currentTemp;
+      if (currentTemp.isEmpty || currentTemp == 'Cold') {
+        targetTemp = 'Warm';
+      }
+
       await FirestoreService.instance.updateSiteVisit(visitId, {'status': 'Completed'});
-      await FirestoreService.instance.updateLead(leadId, {
+
+      final Map<String, dynamic> leadUpdates = {
         'status': 'site visit done',
         'siteVisitStatus': 'Completed',
-        'leadTemperature': 'Warm',
-      });
+      };
+      if (currentTemp != targetTemp) {
+        leadUpdates['leadTemperature'] = targetTemp;
+      }
+      await FirestoreService.instance.updateLead(leadId, leadUpdates);
+
       await _addAutoLogNote(
         leadId: leadId,
         clientName: clientName,
         text: '$clientName completed site visit',
         tag: 'Site Visit Completed',
       );
+
+      if (currentTemp != targetTemp) {
+        await FirestoreService.instance.logTemperatureChange(
+          leadId: leadId,
+          clientName: clientName,
+          oldTemp: currentTemp,
+          newTemp: targetTemp,
+        );
+      }
       
       _handleRefresh();
 
@@ -251,7 +331,7 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
     try {
       await FirestoreService.instance.updateSiteVisit(visitId, {'status': 'Missed'});
       await FirestoreService.instance.updateLead(leadId, {
-        'status': 'called',
+        'status': 'follow-up',
         'siteVisitStatus': 'Missed',
       });
       await _addAutoLogNote(
@@ -393,8 +473,33 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
                 color: AppTheme.darkText,
               ),
             ),
-            Text(
-              '${_allVisits.length} total · ${_allVisits.where((v) => v.status == 'scheduled').length} scheduled',
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: '${_allVisits.length} total · ${_allVisits.where((v) => v.status.toLowerCase() == 'scheduled').length} scheduled · ',
+                  ),
+                  TextSpan(
+                    text: '${_allVisits.where((v) => ['completed', 'done'].contains(v.status.toLowerCase())).length}',
+                    style: const TextStyle(
+                      color: Color(0xFF28A745),
+                    ),
+                  ),
+                  const TextSpan(
+                    text: ' completed · ',
+                  ),
+                  TextSpan(
+                    text: '${_allVisits.where((v) => v.status.toLowerCase() == 'missed').length}',
+                    style: const TextStyle(
+                      color: Color(0xFFE05252),
+                    ),
+                  ),
+                  const TextSpan(
+                    text: ' missed',
+                  ),
+                ],
+              ),
+              softWrap: true,
               style: GoogleFonts.inter(
                 fontSize: 11,
                 fontWeight: FontWeight.w400,

@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CALL_PHONE"/>
     <application
-        android:label="truassets"
+        android:label="TruAssets"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

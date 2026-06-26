@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/custom_icon_widget.dart';
 import '../../../widgets/status_badge_widget.dart';
+import '../../../utils/tag_colors.dart';
 
 class LeadCardWidget extends StatefulWidget {
   final Map<String, dynamic> lead;
@@ -288,6 +289,31 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
                                   ),
                                 ],
                               ),
+                              const SizedBox(height: 4),
+                              // Lead Source row
+                              Row(
+                                children: [
+                                  CustomIconWidget(
+                                    iconName: 'campaign_outlined',
+                                    color: AppTheme.mutedText,
+                                    size: 14,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      (lead['leadSource'] as String? ?? '').isNotEmpty
+                                          ? (lead['leadSource'] as String? ?? '')
+                                          : 'Unknown',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                        color: AppTheme.mutedText,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ],
                           ),
                         ),
@@ -500,80 +526,27 @@ class _OutcomeTagChip extends StatelessWidget {
 
   const _OutcomeTagChip({required this.tag});
 
-  Color get _color {
-    switch (tag) {
-      case 'Interested':
-        return AppTheme.success;
-      case 'Callback':
-        return AppTheme.accent;
-      case 'Site Visit Ready':
-        return AppTheme.purple;
-      case 'Not Answering':
-        return AppTheme.mutedText;
-      case 'Not Interested':
-        return AppTheme.error;
-      case 'Wrong Number':
-        return AppTheme.error;
-      case 'Busy / Call Later':
-        return AppTheme.warning;
-      case 'Postponed Buying':
-        return AppTheme.warning;
-      case 'Source Inventory':
-        return AppTheme.purple;
-      case 'Low Budget':
-        return AppTheme.error;
-      default:
-        return AppTheme.mutedText;
-    }
-  }
-
-  Color get _bg {
-    switch (tag) {
-      case 'Interested':
-        return AppTheme.successContainer;
-      case 'Callback':
-        return AppTheme.accentContainer;
-      case 'Site Visit Ready':
-        return AppTheme.purpleContainer;
-      case 'Not Answering':
-        return const Color(0xFFF3F4F6);
-      case 'Not Interested':
-        return AppTheme.errorContainer;
-      case 'Wrong Number':
-        return AppTheme.errorContainer;
-      case 'Busy / Call Later':
-        return AppTheme.warningContainer;
-      case 'Postponed Buying':
-        return AppTheme.warningContainer;
-      case 'Source Inventory':
-        return AppTheme.purpleContainer;
-      case 'Low Budget':
-        return AppTheme.errorContainer;
-      default:
-        return const Color(0xFFF3F4F6);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final colors = getOutcomeTagColor(tag);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: _bg,
+        color: colors.bgColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _color.withAlpha(77), width: 1),
+        border: Border.all(color: colors.borderColor, width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          CustomIconWidget(iconName: 'label', color: _color, size: 10),
+          CustomIconWidget(iconName: 'label', color: colors.textColor, size: 10),
           const SizedBox(width: 4),
           Text(
             tag,
             style: GoogleFonts.inter(
               fontSize: 10,
               fontWeight: FontWeight.w600,
-              color: _color,
+              color: colors.textColor,
             ),
           ),
         ],

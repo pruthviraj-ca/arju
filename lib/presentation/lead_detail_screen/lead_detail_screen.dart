@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../theme/app_theme.dart';
@@ -8,6 +7,7 @@ import '../../core/app_export.dart';
 import '../../widgets/custom_icon_widget.dart';
 import '../../widgets/in_app_dialer_widget.dart';
 import '../../services/twilio_voice_service.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'dart:async';
 import '../../widgets/status_badge_widget.dart';
@@ -17,6 +17,7 @@ import '../../services/firestore_service.dart';
 import './widgets/call_note_card_widget.dart';
 import './widgets/add_note_form_widget.dart';
 import './widgets/site_visit_scheduler_widget.dart';
+import '../../utils/tag_colors.dart';
 
 class LeadDetailScreen extends StatefulWidget {
   const LeadDetailScreen({super.key});
@@ -147,11 +148,21 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
       // Save call log to Firestore /calllog
       await _saveCallLog(result);
 
-      if (_leadModel != null && (_leadModel!.leadTemperature == null || _leadModel!.leadTemperature!.isEmpty)) {
-        await FirestoreService.instance.updateLead(_leadId!, {
-          'leadTemperature': 'Cold',
-        });
+      final Map<String, dynamic> updates = {
+        'lastCalledAt': DateTime.now().toIso8601String(),
+        'callsCount': FieldValue.increment(1),
+        'callsMade': FieldValue.increment(1),
+      };
+      if (_leadModel != null && _leadModel!.leadTemperature.isEmpty) {
+        updates['leadTemperature'] = 'Cold';
+        await FirestoreService.instance.logTemperatureChange(
+          leadId: _leadId!,
+          clientName: _leadModel!.clientName,
+          oldTemp: '',
+          newTemp: 'Cold',
+        );
       }
+      await FirestoreService.instance.updateLead(_leadId!, updates);
 
       // Pre-fill the Add Note form
       _addNoteFormKey.currentState?.prefillFromDialer(
@@ -185,22 +196,108 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
     }
   }
 
-  void _updateStatus(String newStatus) {
+  void _updateStatus(String newStatus) async {
     if (_leadModel == null) return;
+    final oldStatus = _leadModel!.status;
     final newStatusLower = newStatus.toLowerCase();
+
+    // Skip logging if status didn't actually change
+    if (oldStatus.toLowerCase() == newStatusLower) {
+      setState(() => _isEditingStatus = false);
+      return;
+    }
+
     final isWonOrLost = newStatusLower == 'won' || 
                         newStatusLower == 'lost' || 
                         newStatusLower == 'dead' || 
                         newStatusLower == 'lost/dead';
 
+    final oldTemp = _leadModel!.leadTemperature;
+    final targetTemp = isWonOrLost ? '' : oldTemp;
+
     final updated = _leadModel!.copyWith(
       status: newStatus,
-      leadTemperature: isWonOrLost ? '' : _leadModel!.leadTemperature,
+      leadTemperature: targetTemp,
+      statusChangedAt: DateTime.now().toIso8601String(),
     );
-    FirestoreService.instance.addLead(updated);
+    await FirestoreService.instance.addLead(updated);
+
+    if (oldTemp != targetTemp) {
+      await FirestoreService.instance.logTemperatureChange(
+        leadId: _leadModel!.id,
+        clientName: _leadModel!.clientName,
+        oldTemp: oldTemp,
+        newTemp: targetTemp,
+      );
+    }
+
+    // ── Create auto-log timeline entry for this status change ──
+    final clientName = _leadModel!.clientName;
+    final tag = _statusLogTag(newStatusLower);
+    final text = _statusLogText(newStatusLower, clientName);
+
+    final now = DateTime.now();
+    final createdAt =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    final autoNote = NoteModel(
+      id: '',
+      text: text,
+      tag: tag,
+      callDuration: '',
+      createdAt: createdAt,
+      isAutoLog: true,
+    );
+    await FirestoreService.instance.addNote(_leadModel!.id, autoNote);
+
     setState(() {
       _isEditingStatus = false;
     });
+  }
+
+  /// Returns the tag label for a status-change log entry.
+  String _statusLogTag(String statusLower) {
+    switch (statusLower) {
+      case 'new':
+        return 'Status: New';
+      case 'called':
+        return 'Status: Called';
+      case 'follow-up':
+        return 'Status: Follow-Up';
+      case 'site visit scheduled':
+        return 'Site Visit Scheduled';
+      case 'site visit done':
+        return 'Site Visit Completed';
+      case 'won':
+        return 'Status: Won';
+      case 'lost/dead':
+        return 'Status: Lost/Dead';
+      default:
+        return 'Status Changed';
+    }
+  }
+
+  /// Returns the description text for a status-change log entry.
+  String _statusLogText(String statusLower, String clientName) {
+    switch (statusLower) {
+      case 'new':
+        return '$clientName status set to New';
+      case 'called':
+        return '$clientName status set to Called';
+      case 'follow-up':
+        return '$clientName status set to Follow-Up';
+      case 'site visit scheduled':
+        return '$clientName scheduled site visit';
+      case 'site visit done':
+        return '$clientName completed site visit';
+      case 'won':
+        return '$clientName marked as Won';
+      case 'lost/dead':
+        return '$clientName marked as Lost/Dead';
+      default:
+        return '$clientName status changed to $statusLower';
+    }
   }
 
   void _showEditLeadModal() {
@@ -315,81 +412,6 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
     }
   }
 
-  Color _tagColor(String tag) {
-    switch (tag) {
-      case 'Interested':
-        return AppTheme.success;
-      case 'Callback':
-      case 'Busy / Call Later':
-        return AppTheme.statusCalled;
-      case 'Site Visit Ready':
-        return AppTheme.purple;
-      case 'Not Answering':
-        return AppTheme.mutedText;
-      case 'Not Interested':
-      case 'Finalised Elsewhere':
-      case 'Location Mismatched':
-      case 'Location Mismatch':
-      case 'Channel Partner':
-        return AppTheme.error;
-      case 'Wrong Number':
-        return AppTheme.error;
-      case 'Postponed Buying':
-      case 'Postponed Buying Plan':
-        return AppTheme.warning;
-      case 'Source Inventory':
-        return AppTheme.purple;
-      case 'Low Budget':
-        return AppTheme.error;
-      case 'Site Visit Completed':
-        return const Color(0xFF155724);
-      case 'Site Visit Missed':
-        return const Color(0xFF991B1B);
-      case 'Rescheduled':
-        return const Color(0xFF7D3C00);
-      default:
-        return AppTheme.mutedText;
-    }
-  }
-
-  Color _tagBg(String tag) {
-    switch (tag) {
-      case 'Interested':
-        return AppTheme.successContainer;
-      case 'Callback':
-      case 'Busy / Call Later':
-        return AppTheme.statusCalledBg;
-      case 'Site Visit Ready':
-        return AppTheme.purpleContainer;
-      case 'Not Answering':
-        return const Color(0xFFF3F4F6);
-      case 'Not Interested':
-      case 'Finalised Elsewhere':
-      case 'LocationMismatched':
-      case 'Location Mismatched':
-      case 'Location Mismatch':
-      case 'Channel Partner':
-        return AppTheme.errorContainer;
-      case 'Wrong Number':
-        return AppTheme.errorContainer;
-      case 'Postponed Buying':
-      case 'Postponed Buying Plan':
-        return AppTheme.warningContainer;
-      case 'Source Inventory':
-        return AppTheme.purpleContainer;
-      case 'Low Budget':
-        return AppTheme.errorContainer;
-      case 'Site Visit Completed':
-        return const Color(0xFFD4EDDA);
-      case 'Site Visit Missed':
-        return const Color(0xFFFDE8E8);
-      case 'Rescheduled':
-        return const Color(0xFFFFE8CC);
-      default:
-        return const Color(0xFFF3F4F6);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final mappedNotes = _notes.map((n) {
@@ -398,6 +420,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         'text': n.text,
         'tag': n.tag,
         'followUpDate': n.followUpDate != null ? _formatFollowUp(n.followUpDate!) : null,
+        'followUpDateTime': n.followUpDateTime,
         'callDuration': n.callDuration,
         'createdAt': _formatCreatedAt(n.createdAt),
       };
@@ -488,8 +511,6 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
               leadAdded: leadAdded,
               followUp: followUp,
               tag: tag,
-              tagColor: tag.isNotEmpty ? _tagColor(tag) : AppTheme.mutedText,
-              tagBg: tag.isNotEmpty ? _tagBg(tag) : const Color(0xFFF3F4F6),
               isEditingStatus: _isEditingStatus,
               statuses: _statuses,
               onEditStatus: () =>
@@ -497,8 +518,17 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
               onStatusChanged: _updateStatus,
               onTempChanged: (temp) async {
                 if (_leadModel != null) {
-                  final updated = _leadModel!.copyWith(leadTemperature: temp);
-                  await FirestoreService.instance.addLead(updated);
+                  final oldTemp = _leadModel!.leadTemperature;
+                  if (oldTemp != temp) {
+                    final updated = _leadModel!.copyWith(leadTemperature: temp);
+                    await FirestoreService.instance.addLead(updated);
+                    await FirestoreService.instance.logTemperatureChange(
+                      leadId: _leadModel!.id,
+                      clientName: _leadModel!.clientName,
+                      oldTemp: oldTemp,
+                      newTemp: temp,
+                    );
+                  }
                 }
               },
               onCall: _openDialer,
@@ -553,8 +583,6 @@ class _ClientInfoCard extends StatefulWidget {
   final String leadAdded;
   final String followUp;
   final String tag;
-  final Color tagColor;
-  final Color tagBg;
   final bool isEditingStatus;
   final List<String> statuses;
   final VoidCallback onEditStatus;
@@ -568,8 +596,6 @@ class _ClientInfoCard extends StatefulWidget {
     required this.leadAdded,
     required this.followUp,
     required this.tag,
-    required this.tagColor,
-    required this.tagBg,
     required this.isEditingStatus,
     required this.statuses,
     required this.onEditStatus,
@@ -584,8 +610,6 @@ class _ClientInfoCard extends StatefulWidget {
 
 class _ClientInfoCardState extends State<_ClientInfoCard> {
   String? _selectedTemplate;
-
-  static const String _whatsappSvg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><g transform="translate(0, -16)"><path d="M380.9 97.1C339 55.1 283.2 32 223.9 32c-122.4 0-222 99.6-222 222 0 39.1 10.2 77.3 29.6 111L0 512l148.9-39c32.6 17.8 69 27.2 106.4 27.2 122.4 0 222-99.6 222-222 0-59.3-23.2-115-65.1-157.1zM223.9 474c-33.2 0-65.7-8.9-94-25.7l-6.7-4-88.6 23.2 23.6-86.4-4.4-7c-18.5-29.4-28.2-63.3-28.2-98.2 0-101.7 82.8-184.5 184.6-184.5 49.3 0 95.6 19.2 130.4 54.1 34.8 34.9 54 81.2 54 130.5 0 101.7-82.8 184.6-184.6 184.6zm101.2-138.2c-5.5-2.8-32.8-16.2-37.9-18-5.1-1.9-8.8-2.8-12.5 2.8-3.7 5.6-14.3 18-17.6 21.8-3.2 3.7-6.5 4.2-12 1.4-32.6-16.3-54-29.1-75.5-66-5.7-9.8 5.7-9.1 16.3-30.3 1.8-3.7.9-6.9-.5-9.7-1.4-2.8-12.5-30.1-17.1-41.2-4.5-10.8-9.1-9.3-12.5-9.5-3.2-.2-6.9-.2-10.6-.2-3.7 0-9.7 1.4-14.8 6.9-5.1 5.6-19.4 19-19.4 46.3 0 27.3 19.9 53.7 22.6 57.4 2.8 3.7 39.1 59.7 94.8 83.8 35.2 15.2 49 16.5 66.6 13.9 10.7-1.6 32.8-13.4 37.4-26.4 4.6-13 4.6-24.1 3.2-26.4-1.3-2.5-5-3.9-10.5-6.6z"/></g></svg>''';
 
   static const Map<String, String> _templates = {
     'Email / Call Response': '''Dear [Customer's Name],
@@ -807,6 +831,7 @@ Team TruAssets
               const SizedBox(width: 8),
               _TemperatureSelector(
                 currentTemp: widget.lead['leadTemperature'] as String? ?? '',
+                status: widget.lead['status'] as String? ?? '',
                 onTempChanged: widget.onTempChanged,
               ),
             ],
@@ -889,16 +914,16 @@ Team TruAssets
               GestureDetector(
                 onTap: widget.onCall,
                 child: Container(
-                  width: 32,
-                  height: 32,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF28A745),
-                    shape: BoxShape.circle,
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF28A745),
+                    borderRadius: BorderRadius.circular(23),
                   ),
                   child: const Center(
                     child: Icon(
                       Icons.call,
-                      size: 16,
+                      size: 24,
                       color: Colors.white,
                     ),
                   ),
@@ -994,23 +1019,29 @@ Team TruAssets
                   ),
                 ),
                 const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: widget.tagBg,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    widget.tag,
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: widget.tagColor,
-                    ),
-                  ),
+                Builder(
+                  builder: (context) {
+                    final colors = getOutcomeTagColor(widget.tag);
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.bgColor,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: colors.borderColor, width: 1),
+                      ),
+                      child: Text(
+                        widget.tag,
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: colors.textColor,
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -1082,17 +1113,13 @@ Team TruAssets
                   height: 46,
                   decoration: BoxDecoration(
                     color: const Color(0xFF25D366),
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(23),
                   ),
                   child: Center(
                     child: SvgPicture.string(
                       _whatsappSvg,
-                      width: 22,
-                      height: 22,
-                      colorFilter: const ColorFilter.mode(
-                        Colors.white,
-                        BlendMode.srcIn,
-                      ),
+                      width: 24,
+                      height: 24,
                     ),
                   ),
                 ),
@@ -1735,16 +1762,24 @@ class _EditLeadModalState extends State<_EditLeadModal> {
 
 class _TemperatureSelector extends StatelessWidget {
   final String currentTemp;
+  final String status;
   final ValueChanged<String> onTempChanged;
 
   const _TemperatureSelector({
     required this.currentTemp,
+    required this.status,
     required this.onTempChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (currentTemp.isEmpty || currentTemp == 'none') {
+    final statusLower = status.toLowerCase();
+    final isWonOrLost = statusLower == 'won' || 
+                        statusLower == 'lost' || 
+                        statusLower == 'dead' || 
+                        statusLower == 'lost/dead';
+
+    if (isWonOrLost || currentTemp.isEmpty || currentTemp == 'none') {
       return const SizedBox.shrink();
     }
 
@@ -1794,7 +1829,7 @@ class _TemperatureSelector extends StatelessWidget {
               color: text,
             ),
           ),
-          if (currentTemp == 'Warm') ...[
+          if (currentTemp == 'Warm' || currentTemp == 'Hot') ...[
             const SizedBox(width: 3),
             Icon(Icons.arrow_drop_down, size: 14, color: text),
           ],
@@ -1802,16 +1837,25 @@ class _TemperatureSelector extends StatelessWidget {
       ),
     );
 
-    if (currentTemp == 'Warm') {
-      return PopupMenuButton<String>(
-        onSelected: onTempChanged,
-        itemBuilder: (context) => [
-          const PopupMenuItem(value: 'Hot', child: Text('🔥 Hot')),
-        ],
-        child: badgeChild,
-      );
+    if (currentTemp == 'Cold') {
+      return badgeChild;
     }
 
-    return badgeChild;
+    return PopupMenuButton<String>(
+      onSelected: onTempChanged,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: Colors.white,
+      itemBuilder: (context) => [
+        const PopupMenuItem(value: 'Warm', child: Text('🌤 Warm')),
+        const PopupMenuItem(value: 'Hot', child: Text('🔥 Hot')),
+      ],
+      child: badgeChild,
+    );
   }
 }
+
+const String _whatsappSvg = '''
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" fill="white">
+  <path d="M380.9 97.1C339 55.1 283.2 32 223.9 32c-122.4 0-222 99.6-222 222 0 39.1 10.2 77.3 29.6 111L0 480l117.7-30.9c32.4 17.7 68.9 27 106.1 27h.1c122.3 0 224.1-99.6 224.1-222 0-59.3-25.2-115-67.1-157zm-157 341.6c-33.2 0-65.7-8.9-94-25.7l-6.7-4-69.8 18.3 18.7-68.1-4.4-7c-18.5-29.4-28.2-63.3-28.2-98.2 0-101.7 82.8-184.5 184.6-184.5 49.3 0 95.6 19.2 130.4 54.1 34.8 34.9 56.2 81.2 56.1 130.5 0 101.8-84.9 184.6-186.6 184.6zm101.2-138.2c-5.5-2.8-32.8-16.2-37.9-18-5.1-1.9-8.8-2.8-12.5 2.8-3.7 5.6-14.3 18-17.6 21.8-3.2 3.7-6.5 4.2-12 1.4-32.6-16.3-54-29.1-75.5-66-5.7-9.8 5.7-9.1 16.3-30.3 1.8-3.7.9-6.9-.5-9.7-1.4-2.8-12.5-30.1-17.1-41.2-4.5-10.8-9.1-9.3-12.5-9.5-3.2-.2-6.9-.2-10.6-.2-3.7 0-9.7 1.4-14.8 6.9-5.1 5.6-19.4 19-19.4 46.3 0 27.3 19.9 53.7 22.6 57.4 2.8 3.7 39.1 59.7 94.8 83.8 35.2 15.2 49 16.5 66.6 13.9 10.7-1.6 32.8-13.4 37.4-26.4 4.6-13 4.6-24.1 3.2-26.4-1.3-2.5-5-3.9-10.5-6.6z"/>
+</svg>
+''';

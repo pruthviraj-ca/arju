@@ -331,52 +331,12 @@ class _LoginScreenState extends State<LoginScreen>
                         children: [
                           const SizedBox(height: 24),
                           // Logo mark
-                          Container(
-                            width: 72,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              color: AppTheme.primary,
-                              borderRadius: BorderRadius.circular(18),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppTheme.primary.withAlpha(77),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 6),
-                                ),
-                              ],
-                            ),
-                            child: Center(
-                              child: Text(
-                                'TA',
-                                style: GoogleFonts.inter(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
+                          Image.asset(
+                            'assets/images/truassets_logo.png',
+                            height: 130,
+                            fit: BoxFit.contain,
                           ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'TruAssets',
-                            style: GoogleFonts.inter(
-                              fontSize: 30,
-                              fontWeight: FontWeight.w800,
-                              color: AppTheme.primary,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Real Estate CRM',
-                            style: GoogleFonts.inter(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w400,
-                              color: AppTheme.mutedText,
-                              letterSpacing: 0.3,
-                            ),
-                          ),
-                          const SizedBox(height: 40),
+                          const SizedBox(height: 24),
                         ],
                       ),
                     ),
@@ -626,8 +586,8 @@ class _LoginScreenState extends State<LoginScreen>
                                   width: double.infinity,
                                   height: 50,
                                   child: OutlinedButton(
-                                    onPressed: () {
-                                      AuthService.isDemoMode.value = true;
+                                    onPressed: () async {
+                                      await AuthService.instance.setDemoMode(true);
                                     },
                                     style: OutlinedButton.styleFrom(
                                       side: const BorderSide(

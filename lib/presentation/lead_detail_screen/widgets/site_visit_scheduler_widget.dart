@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../theme/app_theme.dart';
 import '../../../models/site_visit_model.dart';
+import '../../../models/note_model.dart';
 import '../../../services/firestore_service.dart';
 
 /// Site visit scheduler button shown in Lead Detail.
@@ -199,7 +200,23 @@ class __ScheduleBottomSheetContentState
     await FirestoreService.instance.updateLead(widget.leadId, {
       'status': 'site visit scheduled',
       'lastTag': 'Site Visit Ready',
+      'statusChangedAt': DateTime.now().toIso8601String(),
     });
+
+    final now = DateTime.now();
+    final createdAt =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    final autoNote = NoteModel(
+      id: '',
+      text: '${widget.clientName} scheduled site visit for ${visit.visitDate} at ${visit.visitTime}',
+      tag: 'Site Visit Scheduled',
+      callDuration: '',
+      createdAt: createdAt,
+      isAutoLog: true,
+    );
+    await FirestoreService.instance.addNote(widget.leadId, autoNote);
 
     if (mounted) {
       setState(() => _isSaving = false);

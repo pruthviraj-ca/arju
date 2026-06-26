@@ -4,6 +4,7 @@ import '../../../routes/app_routes.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/custom_icon_widget.dart';
 import '../../../utils/lead_source_assets.dart';
+import '../../../utils/tag_colors.dart';
 
 class FollowUpBucketsWidget extends StatefulWidget {
   final List<Map<String, dynamic>> todayLeads;
@@ -12,6 +13,7 @@ class FollowUpBucketsWidget extends StatefulWidget {
   final List<Map<String, dynamic>> overdueLeads;
   final void Function(Map<String, dynamic>, String) onCallNow;
   final String? initialBucket;
+  final VoidCallback? onReturn;
 
   const FollowUpBucketsWidget({
     super.key,
@@ -21,6 +23,7 @@ class FollowUpBucketsWidget extends StatefulWidget {
     required this.overdueLeads,
     required this.onCallNow,
     this.initialBucket,
+    this.onReturn,
   });
 
   @override
@@ -65,44 +68,68 @@ class _FollowUpBucketsWidgetState extends State<FollowUpBucketsWidget> {
     }
   }
 
-  List<_BucketData> get _buckets => [
-    _BucketData(
-      title: 'Overdue',
-      subtitle: '2+ days past follow-up',
-      leads: widget.overdueLeads,
-      color: AppTheme.error,
-      bgColor: AppTheme.errorContainer,
-      borderColor: const Color(0xFFFCA5A5),
-      iconName: 'warning_amber',
-    ),
-    _BucketData(
-      title: 'Due',
-      subtitle: "Yesterday's follow-up",
-      leads: widget.dueLeads,
-      color: AppTheme.warning,
-      bgColor: AppTheme.warningContainer,
-      borderColor: const Color(0xFFFCD34D),
-      iconName: 'schedule',
-    ),
-    _BucketData(
-      title: 'Today',
-      subtitle: 'Scheduled for today',
-      leads: widget.todayLeads,
-      color: AppTheme.primary,
-      bgColor: AppTheme.primaryContainer,
-      borderColor: const Color(0xFF93C5FD),
-      iconName: 'today',
-    ),
-    _BucketData(
-      title: 'Tomorrow',
-      subtitle: 'Upcoming follow-ups',
-      leads: widget.tomorrowLeads,
-      color: AppTheme.success,
-      bgColor: AppTheme.successContainer,
-      borderColor: const Color(0xFF6EE7B7),
-      iconName: 'event',
-    ),
-  ];
+
+
+  List<_BucketData> get _buckets {
+    List<Map<String, dynamic>> _sortLeads(List<Map<String, dynamic>> leads) {
+      final sorted = List<Map<String, dynamic>>.from(leads);
+      sorted.sort((a, b) {
+        final rawA = a['followUpDateTime'] as String? ?? '';
+        final rawB = b['followUpDateTime'] as String? ?? '';
+        
+        final DateTime maxDate = DateTime(3000, 1, 1);
+        
+        final DateTime dateA = rawA.isNotEmpty && rawA != 'none'
+            ? (DateTime.tryParse(rawA) ?? maxDate)
+            : maxDate;
+        final DateTime dateB = rawB.isNotEmpty && rawB != 'none'
+            ? (DateTime.tryParse(rawB) ?? maxDate)
+            : maxDate;
+            
+        return dateA.compareTo(dateB);
+      });
+      return sorted;
+    }
+
+    return [
+      _BucketData(
+        title: 'Overdue',
+        subtitle: '2+ days past follow-up',
+        leads: _sortLeads(widget.overdueLeads),
+        color: AppTheme.error,
+        bgColor: AppTheme.errorContainer,
+        borderColor: const Color(0xFFFCA5A5),
+        iconName: 'warning_amber',
+      ),
+      _BucketData(
+        title: 'Due',
+        subtitle: "Yesterday's follow-up",
+        leads: _sortLeads(widget.dueLeads),
+        color: AppTheme.warning,
+        bgColor: AppTheme.warningContainer,
+        borderColor: const Color(0xFFFCD34D),
+        iconName: 'schedule',
+      ),
+      _BucketData(
+        title: 'Today',
+        subtitle: 'Scheduled for today',
+        leads: _sortLeads(widget.todayLeads),
+        color: AppTheme.primary,
+        bgColor: AppTheme.primaryContainer,
+        borderColor: const Color(0xFF93C5FD),
+        iconName: 'today',
+      ),
+      _BucketData(
+        title: 'Tomorrow',
+        subtitle: 'Upcoming follow-ups',
+        leads: _sortLeads(widget.tomorrowLeads),
+        color: AppTheme.success,
+        bgColor: AppTheme.successContainer,
+        borderColor: const Color(0xFF6EE7B7),
+        iconName: 'event',
+      ),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -184,6 +211,7 @@ class _FollowUpBucketsWidgetState extends State<FollowUpBucketsWidget> {
             key: ValueKey(selected.title),
             bucket: selected,
             onCallNow: widget.onCallNow,
+            onReturn: widget.onReturn,
           ),
         ),
       ],
@@ -323,12 +351,16 @@ class _BucketTile extends StatelessWidget {
 class _BucketPanel extends StatelessWidget {
   final _BucketData bucket;
   final void Function(Map<String, dynamic>, String) onCallNow;
+  final VoidCallback? onReturn;
 
   const _BucketPanel({
     super.key,
     required this.bucket,
     required this.onCallNow,
+    this.onReturn,
   });
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -425,12 +457,26 @@ class _BucketPanel extends StatelessWidget {
                   physics: const NeverScrollableScrollPhysics(),
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   itemCount: bucket.leads.length,
-                  separatorBuilder: (_, __) => const Divider(
-                    height: 1,
-                    indent: 16,
-                    endIndent: 16,
-                    color: AppTheme.borderColor,
-                  ),
+                  separatorBuilder: (context, index) {
+                    final currentLead = bucket.leads[index];
+                    final nextLead = index + 1 < bucket.leads.length ? bucket.leads[index + 1] : null;
+                    
+                    final bool currentOverdue = isOverdueAndUnhandled(currentLead);
+                    final bool nextOverdue = nextLead != null && isOverdueAndUnhandled(nextLead);
+                    
+                    if (currentOverdue) {
+                      return const SizedBox(height: 0);
+                    } else if (nextOverdue) {
+                      return const SizedBox(height: 6);
+                    }
+                    
+                    return const Divider(
+                      height: 1,
+                      indent: 16,
+                      endIndent: 16,
+                      color: AppTheme.borderColor,
+                    );
+                  },
                   itemBuilder: (context, index) {
                     final lead = bucket.leads[index];
                     return _LeadRow(
@@ -439,6 +485,7 @@ class _BucketPanel extends StatelessWidget {
                       isToday: bucket.title == 'Today',
                       bucketTitle: bucket.title,
                       onCallNow: () => onCallNow(lead, bucket.title),
+                      onReturn: onReturn,
                     );
                   },
                 ),
@@ -454,6 +501,7 @@ class _LeadRow extends StatelessWidget {
   final bool isToday;
   final String bucketTitle;
   final VoidCallback onCallNow;
+  final VoidCallback? onReturn;
 
   const _LeadRow({
     required this.lead,
@@ -461,7 +509,10 @@ class _LeadRow extends StatelessWidget {
     required this.isToday,
     required this.bucketTitle,
     required this.onCallNow,
+    this.onReturn,
   });
+
+
 
   String _formatStatus(String status) {
     switch (status.toLowerCase()) {
@@ -473,8 +524,9 @@ class _LeadRow extends StatelessWidget {
         return 'Follow-Up';
       case 'site visit':
       case 'site visit scheduled':
-      case 'site visit done':
         return 'Site Visit';
+      case 'site visit done':
+        return 'Visited';
       case 'won':
         return 'Won';
       case 'lost/dead':
@@ -489,61 +541,6 @@ class _LeadRow extends StatelessWidget {
     }
   }
 
-  Color _getStatusTextColor(String status) {
-    switch (status.toLowerCase()) {
-      case 'new':
-        return const Color(0xFF6B7280);
-      case 'called':
-        return const Color(0xFF185FA5);
-      case 'follow-up':
-        return const Color(0xFF7C3AED);
-      case 'site visit':
-      case 'site visit scheduled':
-      case 'site visit done':
-        return const Color(0xFF6A4FB5);
-      case 'won':
-        return const Color(0xFF28A745);
-      case 'lost/dead':
-      case 'lost':
-      case 'dead':
-        return const Color(0xFFE05252);
-      default:
-        return const Color(0xFF6B7280);
-    }
-  }
-
-  Color _getStatusBgColor(String status) {
-    switch (status.toLowerCase()) {
-      case 'new':
-        return const Color(0xFFF3F4F6);
-      case 'called':
-        return const Color(0xFFE8F1FA);
-      case 'follow-up':
-        return const Color(0xFFF3E8FF);
-      case 'site visit':
-      case 'site visit scheduled':
-      case 'site visit done':
-        return const Color(0xFFF0ECFC);
-      case 'won':
-        return const Color(0xFFE8F5E9);
-      case 'lost/dead':
-      case 'lost':
-      case 'dead':
-        return const Color(0xFFFFEBEE);
-      default:
-        return const Color(0xFFF3F4F6);
-    }
-  }
-
-  Color _getStatusBorderColor(String status, Color textColor) {
-    switch (status.toLowerCase()) {
-      case 'new':
-        return const Color(0xFFD1D5DB);
-      default:
-        return textColor;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final name = lead['clientName'] as String? ?? '';
@@ -551,124 +548,203 @@ class _LeadRow extends StatelessWidget {
     final tag = lead['lastTag'] as String? ?? '';
     final leadSource = lead['leadSource'] as String? ?? '';
 
-    Widget? leadSourceWidget;
-    if (leadSource.isNotEmpty) {
-      leadSourceWidget = LeadSourceIconBadge(leadSource: leadSource);
-    }
 
-    return InkWell(
-      onTap: () => Navigator.pushNamed(
-        context,
-        AppRoutes.leadDetailScreen,
-        arguments: {
-          'leadId': lead['id'] as String,
-          'returnTo': 'Dashboard',
-          'returnBucket': bucketTitle,
-        },
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.inter(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w700,
-                      color: AppTheme.darkText,
-                    ),
+
+    final showRedBorder = isOverdueAndUnhandled(lead);
+
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.darkText,
                   ),
-                  if (property.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        CustomIconWidget(
-                          iconName: 'apartment',
-                          color: AppTheme.mutedText,
-                          size: 12,
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            property,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.inter(
-                              fontSize: 11.5,
+                ),
+                if (property.isNotEmpty || leadSource.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (property.isNotEmpty)
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CustomIconWidget(
+                              iconName: 'apartment',
                               color: AppTheme.mutedText,
+                              size: 12,
                             ),
-                          ),
+                            const SizedBox(width: 4),
+                            Text(
+                              property,
+                              style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                color: AppTheme.mutedText,
+                              ),
+                            ),
+                          ],
                         ),
-                        if (leadSourceWidget != null) ...[
-                          const SizedBox(width: 6),
-                          leadSourceWidget,
-                        ],
-                      ],
-                    ),
-                  ],
-                  const SizedBox(height: 6),
-                  Builder(
-                    builder: (context) {
-                      final status = lead['status'] as String? ?? 'New';
-                      final displayStatus = _formatStatus(status);
-                      final statusColor = _getStatusTextColor(status);
-                      final statusBg = _getStatusBgColor(status);
-                      final statusBorder = _getStatusBorderColor(status, statusColor);
-
-                      final statusWidget = Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: statusBg,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: statusBorder, width: 1),
+                      if (leadSource.isNotEmpty)
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CustomIconWidget(
+                              iconName: 'campaign_outlined',
+                              color: AppTheme.mutedText,
+                              size: 12,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              leadSource,
+                              style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                color: AppTheme.mutedText,
+                              ),
+                            ),
+                          ],
                         ),
-                        child: Text(
-                          displayStatus,
-                          style: GoogleFonts.inter(
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w600,
-                            color: statusColor,
-                          ),
-                        ),
-                      );
-
-                      return Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          statusWidget,
-                          if (tag.isNotEmpty) _TagChip(tag: tag),
-                        ],
-                      );
-                    },
+                    ],
                   ),
                 ],
-              ),
+                const SizedBox(height: 4),
+                Builder(
+                  builder: (context) {
+                    final status = lead['status'] as String? ?? 'New';
+                    final displayStatus = _formatStatus(status);
+                    final tagColors = getStatusTagColor(status);
+
+                    final statusWidget = Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: tagColors.bgColor,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text(
+                        displayStatus,
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: tagColors.textColor,
+                        ),
+                      ),
+                    );
+
+                    return Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        statusWidget,
+                        if (tag.isNotEmpty) _TagChip(tag: tag),
+                      ],
+                    );
+                  },
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            IconButton.filled(
-              onPressed: onCallNow,
-              style: IconButton.styleFrom(
-                backgroundColor: AppTheme.success,
-                foregroundColor: Colors.white,
-                fixedSize: const Size(38, 38),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: onCallNow,
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: const Color(0xFF28A745),
+                borderRadius: BorderRadius.circular(19),
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.call,
+                  size: 18,
+                  color: Colors.white,
                 ),
               ),
-              icon: const Icon(Icons.call_rounded, size: 17),
-              tooltip: 'Call',
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (showRedBorder) {
+      return Container(
+        margin: const EdgeInsets.only(left: 8, right: 8, bottom: 6),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFFE5E5E5), width: 0.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(13),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
-      ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  width: 3,
+                  color: const Color(0xFFE05252),
+                ),
+                Expanded(
+                  child: InkWell(
+                    onTap: () async {
+                      await Navigator.pushNamed(
+                        context,
+                        AppRoutes.leadDetailScreen,
+                        arguments: {
+                          'leadId': lead['id'] as String,
+                          'returnTo': 'Dashboard',
+                          'returnBucket': bucketTitle,
+                        },
+                      );
+                      if (onReturn != null) {
+                        onReturn!();
+                      }
+                    },
+                    child: content,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return InkWell(
+      onTap: () async {
+        await Navigator.pushNamed(
+          context,
+          AppRoutes.leadDetailScreen,
+          arguments: {
+            'leadId': lead['id'] as String,
+            'returnTo': 'Dashboard',
+            'returnBucket': bucketTitle,
+          },
+        );
+        if (onReturn != null) {
+          onReturn!();
+        }
+      },
+      child: content,
     );
   }
 }
@@ -721,58 +797,23 @@ class _TagChip extends StatelessWidget {
 
   const _TagChip({required this.tag});
 
-  Color get _color {
-    switch (tag) {
-      case 'Interested':
-        return AppTheme.success;
-      case 'Callback':
-        return AppTheme.statusCalled;
-      case 'Site Visit Ready':
-        return AppTheme.purple;
-      case 'Not Interested':
-      case 'Wrong Number':
-        return AppTheme.error;
-      case 'Busy / Call Later':
-        return AppTheme.warning;
-      default:
-        return AppTheme.mutedText;
-    }
-  }
-
-  Color get _bg {
-    switch (tag) {
-      case 'Interested':
-        return AppTheme.successContainer;
-      case 'Callback':
-        return AppTheme.statusCalledBg;
-      case 'Site Visit Ready':
-        return AppTheme.purpleContainer;
-      case 'Not Interested':
-      case 'Wrong Number':
-        return AppTheme.errorContainer;
-      case 'Busy / Call Later':
-        return AppTheme.warningContainer;
-      default:
-        return const Color(0xFFF3F4F6);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final colors = getOutcomeTagColor(tag);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
-        color: _bg,
-        borderRadius: BorderRadius.circular(10),
+        color: colors.bgColor,
+        borderRadius: BorderRadius.circular(14),
       ),
       child: Text(
         tag,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: GoogleFonts.inter(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: _color,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: colors.textColor,
         ),
       ),
     );
@@ -809,4 +850,35 @@ class LeadSourceIconBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+bool isOverdueAndUnhandled(Map<String, dynamic> lead) {
+  final raw = lead['followUpDateTime'] as String? ?? '';
+  if (raw.isEmpty || raw == 'none') return false;
+  final followUpTime = DateTime.tryParse(raw);
+  if (followUpTime == null) return false;
+  
+  final now = DateTime.now();
+  if (!followUpTime.isBefore(now)) return false;
+
+  final lastCalledStr = lead['lastCalledAt'] as String?;
+  final lastCallNoteStr = lead['lastCallNoteAt'] as String?;
+  final statusChangedStr = lead['statusChangedAt'] as String?;
+  
+  DateTime? lastActivity;
+  for (final timeStr in [lastCalledStr, lastCallNoteStr, statusChangedStr]) {
+    if (timeStr != null && timeStr.isNotEmpty && timeStr != 'none') {
+      final dt = DateTime.tryParse(timeStr);
+      if (dt != null) {
+        if (lastActivity == null || dt.isAfter(lastActivity)) {
+          lastActivity = dt;
+        }
+      }
+    }
+  }
+  
+  if (lastActivity != null && lastActivity.isAfter(followUpTime)) {
+    return false;
+  }
+  return true;
 }

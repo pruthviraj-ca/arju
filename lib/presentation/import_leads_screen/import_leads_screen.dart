@@ -1885,11 +1885,33 @@ class _ManualLeadForm extends StatelessWidget {
 
             const _FieldLabel(label: 'Property Interest', required: false),
             const SizedBox(height: 6),
-            TextFormField(
-              controller: propertyCtrl,
-              style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
-              decoration: _inputDecoration('e.g. Sky Residency 3BHK', Icons.apartment_outlined),
-              textCapitalization: TextCapitalization.words,
+            StatefulBuilder(
+              builder: (context, setStateLocal) {
+                final currentText = propertyCtrl.text.trim();
+                final List<String> dropdownOptions = ['Any', 'Mantri Serenity', 'Mantri Courtyard'];
+                final String dropdownValue = dropdownOptions.contains(currentText)
+                    ? (currentText.isEmpty ? 'Any' : currentText)
+                    : 'Any';
+
+                return DropdownButtonFormField<String>(
+                  value: dropdownValue,
+                  style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
+                  decoration: _inputDecoration('Select Property', Icons.apartment_outlined),
+                  dropdownColor: Colors.white,
+                  items: dropdownOptions.map((prop) {
+                    return DropdownMenuItem<String>(
+                      value: prop,
+                      child: Text(prop),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      propertyCtrl.text = val;
+                      setStateLocal(() {});
+                    }
+                  },
+                );
+              },
             ),
             const SizedBox(height: 16),
 

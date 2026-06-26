@@ -28,27 +28,54 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
   int _durationMinutes = 0;
   int _durationSeconds = 0;
   bool _isSaving = false;
+  bool _showForm = false;
 
-  static const List<String> _leftTags = [
+  static const List<String> _followUpTags = [
     'Callback',
     'Interested',
     'Not Answering',
     'Postponed Buying Plan',
+    'Prospect',
     'Site Visit Ready',
-    'Source Inventory',
   ];
 
-  static const List<String> _rightTags = [
+  static const List<String> _noFollowUpTags = [
+    'Booked',
     'Channel Partner',
+    'Closed with Colleague',
+    'Dropped Buying Plans',
     'Finalised Elsewhere',
     'Location Mismatch',
     'Low Budget',
     'Not Interested',
+    'Not Responding',
+    'Source Inventory',
     'Wrong Number',
   ];
 
+  /// Per-tag status mapping. null = keep current status.
+  static const Map<String, String?> _tagStatusMap = {
+    'Booked': 'won',
+    'Channel Partner': 'lost/dead',
+    'Closed with Colleague': 'lost/dead',
+    'Dropped Buying Plans': 'lost/dead',
+    'Finalised Elsewhere': 'lost/dead',
+    'Location Mismatch': 'lost/dead',
+    'Low Budget': 'lost/dead',
+    'Not Interested': 'lost/dead',
+    'Not Responding': 'lost/dead',
+    'Source Inventory': null,
+    'Wrong Number': 'lost/dead',
+    'Callback': 'follow-up',
+    'Interested': 'follow-up',
+    'Not Answering': 'follow-up',
+    'Postponed Buying Plan': 'follow-up',
+    'Prospect': 'site visit done',
+    'Site Visit Ready': 'follow-up',
+  };
+
   bool get _showFollowUp =>
-      _selectedTag != null && _leftTags.contains(_selectedTag);
+      _selectedTag != null && _followUpTags.contains(_selectedTag);
 
   @override
   void dispose() {
@@ -67,6 +94,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       }
       _durationMinutes = durationSeconds ~/ 60;
       _durationSeconds = durationSeconds % 60;
+      _showForm = true;
     });
   }
 
@@ -150,8 +178,8 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       ).showSnackBar(const SnackBar(content: Text('Please select an outcome tag.')));
       return;
     }
-    final isLeftColumn = _leftTags.contains(_selectedTag);
-    if (isLeftColumn && _followUpDate == null) {
+    final isFollowUpTag = _followUpTags.contains(_selectedTag);
+    if (isFollowUpTag && _followUpDate == null) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Please select a follow-up date.')));
@@ -173,7 +201,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
         ? '${_durationMinutes}m ${_durationSeconds.toString().padLeft(2, '0')}s'
         : null;
 
-    final hasFollowUp = isLeftColumn && followUpDate != null;
+    final hasFollowUp = isFollowUpTag && followUpDate != null;
 
     final note = NoteModel(
       id: '',
@@ -190,46 +218,76 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       await FirestoreService.instance.addNote(widget.leadId, note);
 
       // 2. Directly update the lead fields (reliable, no stream race condition)
-      final bool isRightColumnTag = _rightTags.contains(selectedTag);
-      String newStatus = isRightColumnTag ? 'lost/dead' : 'called';
       final Map<String, dynamic> leadUpdates = {
         'lastTag': selectedTag,
         'lastNote': noteText,
-        'status': newStatus,
         'callsCount': FieldValue.increment(1),
+        'lastCallNoteAt': DateTime.now().toIso8601String(),
+        'statusChangedAt': DateTime.now().toIso8601String(),
       };
 
-      if (isRightColumnTag) {
-        leadUpdates['leadTemperature'] = '';
-      } else {
-        try {
-          final leadSnap = await FirebaseFirestore.instance
-              .collection('users')
-              .doc(FirestoreService.instance.currentUid)
-              .collection('leads')
-              .doc(widget.leadId)
-              .get();
-          if (leadSnap.exists) {
-            final currentTemp = leadSnap.data()?['leadTemperature'] as String?;
-            if (currentTemp == null || currentTemp.isEmpty) {
-              leadUpdates['leadTemperature'] = 'Cold';
-            }
-          }
-        } catch (e) {
-          debugPrint('Error fetching lead temperature: $e');
+      // ── Per-tag status mapping with site-visit override ──
+      final String? mappedStatus = _tagStatusMap[selectedTag];
+      final bool isLostOrWon = mappedStatus == 'won' || mappedStatus == 'lost/dead';
+
+      // Fetch current lead data for override logic
+      String currentStatus = '';
+      String currentTemp = '';
+      String clientName = 'Lead';
+      try {
+        final leadSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(FirestoreService.instance.currentUid)
+            .collection('leads')
+            .doc(widget.leadId)
+            .get();
+        if (leadSnap.exists) {
+          currentStatus = leadSnap.data()?['status'] as String? ?? '';
+          currentTemp = leadSnap.data()?['leadTemperature'] as String? ?? '';
+          clientName = leadSnap.data()?['clientName'] as String? ?? 'Lead';
         }
+      } catch (e) {
+        debugPrint('Error fetching lead data: $e');
       }
 
+      if (mappedStatus == null) {
+        // "Source Inventory" — keep whatever status the lead currently has
+        leadUpdates['status'] = currentStatus.isNotEmpty ? currentStatus : 'called';
+      } else if (isLostOrWon) {
+        // Won/Lost always override any status (including Visited)
+        leadUpdates['status'] = mappedStatus;
+      } else if (currentStatus == 'site visit done') {
+        // "Visited" is persistent — non-Lost/non-Won tags don't downgrade it
+        leadUpdates['status'] = 'site visit done';
+      } else {
+        // Normal case: use the mapped status
+        leadUpdates['status'] = mappedStatus;
+      }
+
+      // Check if final status is won or lost/dead
+      final finalStatus = leadUpdates['status'] as String;
+      final finalStatusLower = finalStatus.toLowerCase();
+      final finalIsLostOrWon = finalStatusLower == 'won' ||
+                                finalStatusLower == 'lost' ||
+                                finalStatusLower == 'dead' ||
+                                finalStatusLower == 'lost/dead';
+
+      String targetTemp = currentTemp;
+      if (finalIsLostOrWon) {
+        targetTemp = '';
+      } else if (currentTemp.isEmpty) {
+        targetTemp = 'Cold';
+      }
+
+      leadUpdates['leadTemperature'] = targetTemp;
+
+      // Follow-up date handling
       if (hasFollowUp) {
         leadUpdates['followUpDate'] = _formatDateIso(followUpDate);
         leadUpdates['followUpDateTime'] = followUpDate.toIso8601String();
-        leadUpdates['status'] = 'follow-up';
       } else {
         leadUpdates['followUpDate'] = 'none';
         leadUpdates['followUpDateTime'] = null;
-        if (isRightColumnTag) {
-          leadUpdates['status'] = 'lost/dead';
-        }
       }
 
       if (durationStr != null) {
@@ -237,6 +295,15 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       }
 
       await FirestoreService.instance.updateLead(widget.leadId, leadUpdates);
+
+      if (currentTemp != targetTemp) {
+        await FirestoreService.instance.logTemperatureChange(
+          leadId: widget.leadId,
+          clientName: clientName,
+          oldTemp: currentTemp,
+          newTemp: targetTemp,
+        );
+      }
 
       // 3. Clear form state after successful save
       setState(() {
@@ -246,6 +313,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
         _followUpDate = null;
         _durationMinutes = 0;
         _durationSeconds = 0;
+        _showForm = false;
       });
 
       widget.onNoteSaved();
@@ -259,7 +327,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
                 const Icon(Icons.check_circle, color: Colors.white, size: 16),
                 const SizedBox(width: 8),
                 Text(
-                  'Note saved successfully',
+                  'Call note saved successfully',
                   style: GoogleFonts.inter(
                     color: Colors.white,
                     fontWeight: FontWeight.w600,
@@ -283,7 +351,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
     }
   }
 
-  Widget _buildTagChip(String tag, {required bool isLeft}) {
+  Widget _buildTagChip(String tag, {required bool isFollowUp}) {
     final isSelected = _selectedTag == tag;
     
     Color bgColor;
@@ -291,7 +359,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
     Color textColor;
 
     if (isSelected) {
-      if (isLeft) {
+      if (isFollowUp) {
         bgColor = const Color(0xFFD4EDDA);
         borderColor = const Color(0xFF28A745);
         textColor = const Color(0xFF155724);
@@ -306,269 +374,287 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       textColor = const Color(0xFF777777);
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: SizedBox(
-        width: double.infinity,
-        child: GestureDetector(
-          onTap: () {
-            setState(() {
-              _selectedTag = tag;
-              if (!isLeft) {
-                _followUpDate = null;
-              }
-            });
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-            decoration: BoxDecoration(
-              color: bgColor,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: borderColor, width: 1.5),
-            ),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                tag,
-                textAlign: TextAlign.center,
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                  color: textColor,
-                ),
-              ),
-            ),
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedTag = tag;
+          if (!isFollowUp) {
+            _followUpDate = null;
+          }
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: borderColor, width: 1.5),
+        ),
+        child: Text(
+          tag,
+          style: GoogleFonts.inter(
+            fontSize: 11,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+            color: textColor,
           ),
         ),
       ),
     );
   }
 
+  void toggleCallNoteForm() {
+    setState(() {
+      _showForm = !_showForm;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.borderColor),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(8),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.add_comment, color: AppTheme.primary, size: 18),
-              const SizedBox(width: 8),
-              Text(
-                'Add Call Note',
-                style: GoogleFonts.inter(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.darkText,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: toggleCallNoteForm,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFDDDDDD), width: 1),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.add, size: 16, color: Colors.black),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Add Call Note',
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          // Note textarea
-          TextField(
-            controller: _noteCtrl,
-            maxLines: 4,
-            style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
-            decoration: InputDecoration(
-              hintText: 'What happened in this call?',
-              hintStyle: GoogleFonts.inter(
-                fontSize: 13,
-                color: AppTheme.mutedText,
-              ),
-              contentPadding: const EdgeInsets.all(12),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: AppTheme.borderColor),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: AppTheme.borderColor),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: AppTheme.primary, width: 2),
-              ),
-              filled: true,
-              fillColor: const Color(0xFFF9FAFB),
+                Icon(
+                  _showForm ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                  size: 16,
+                  color: const Color(0xFF666666),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
-          // Outcome tag dropdown replacement
-          _FormLabel(label: 'Outcome Tag'),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Left Column (Follow-up Required)
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Follow-up Required',
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFF28A745),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          alignment: Alignment.topCenter,
+          child: _showForm
+              ? Container(
+                  margin: const EdgeInsets.only(top: 15),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.borderColor),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withAlpha(8),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    ..._leftTags.map((t) => _buildTagChip(t, isLeft: true)),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Right Column (No Follow-up Needed)
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'No Follow-up Needed',
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFFE05252),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ..._rightTags.map((t) => _buildTagChip(t, isLeft: false)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          // Follow-up date (conditional)
-          if (_showFollowUp) ...[
-            const SizedBox(height: 12),
-            _FormLabel(label: 'Next Follow-up Date & Time'),
-            const SizedBox(height: 6),
-            GestureDetector(
-              onTap: _pickFollowUpDateTime,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF9FAFB),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.borderColor),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.event,
-                      size: 16,
-                      color: AppTheme.mutedText,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _followUpDate != null
-                            ? _formatDateTime(_followUpDate!)
-                            : 'Select follow-up date & time',
-                        style: GoogleFonts.inter(
-                          fontSize: 13,
-                          color: _followUpDate != null
-                              ? AppTheme.darkText
-                              : AppTheme.mutedText,
-                          fontWeight: _followUpDate != null
-                              ? FontWeight.w600
-                              : FontWeight.w400,
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Note textarea
+                      TextField(
+                        controller: _noteCtrl,
+                        maxLines: 4,
+                        style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
+                        decoration: InputDecoration(
+                          hintText: 'What happened in this call?',
+                          hintStyle: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: AppTheme.mutedText,
+                          ),
+                          contentPadding: const EdgeInsets.all(12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: AppTheme.borderColor),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: AppTheme.borderColor),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: AppTheme.primary, width: 2),
+                          ),
+                          filled: true,
+                          fillColor: const Color(0xFFF9FAFB),
                         ),
                       ),
-                    ),
-                    const Icon(
-                      Icons.chevron_right,
-                      size: 16,
-                      color: AppTheme.mutedText,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          // Call duration
-          _FormLabel(label: 'Call Duration (optional)'),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                child: _DurationField(
-                  label: 'Min',
-                  value: _durationMinutes,
-                  max: 59,
-                  onChanged: (v) => setState(() => _durationMinutes = v),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _DurationField(
-                  label: 'Sec',
-                  value: _durationSeconds,
-                  max: 59,
-                  onChanged: (v) => setState(() => _durationSeconds = v),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _isSaving ? null : _saveNote,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.accent,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                elevation: 0,
-              ),
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
+                      const SizedBox(height: 12),
+                      // Outcome tag dropdown replacement
+                      const _FormLabel(label: 'Outcome Tag'),
+                      const SizedBox(height: 10),
+                      // Follow-up Required section
+                      Text(
+                        'Follow-up Required',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF28A745),
+                        ),
                       ),
-                    )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.save, size: 16),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Save Note',
-                          style: GoogleFonts.inter(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: _followUpTags.map((t) => _buildTagChip(t, isFollowUp: true)).toList(),
+                      ),
+                      const SizedBox(height: 12),
+                      // No Follow-up Needed section
+                      Text(
+                        'No Follow-up Needed',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFFE05252),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: _noFollowUpTags.map((t) => _buildTagChip(t, isFollowUp: false)).toList(),
+                      ),
+                      // Follow-up date (conditional)
+                      if (_showFollowUp) ...[
+                        const SizedBox(height: 12),
+                        const _FormLabel(label: 'Next Follow-up Date & Time'),
+                        const SizedBox(height: 6),
+                        GestureDetector(
+                          onTap: _pickFollowUpDateTime,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 12,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF9FAFB),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppTheme.borderColor),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.event,
+                                  size: 16,
+                                  color: AppTheme.mutedText,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _followUpDate != null
+                                        ? _formatDateTime(_followUpDate!)
+                                        : 'Select follow-up date & time',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 13,
+                                      color: _followUpDate != null
+                                          ? AppTheme.darkText
+                                          : AppTheme.mutedText,
+                                      fontWeight: _followUpDate != null
+                                          ? FontWeight.w600
+                                          : FontWeight.w400,
+                                    ),
+                                  ),
+                                ),
+                                const Icon(
+                                  Icons.chevron_right,
+                                  size: 16,
+                                  color: AppTheme.mutedText,
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
-                    ),
-            ),
-          ),
-        ],
-      ),
+                      const SizedBox(height: 12),
+                      // Call duration
+                      const _FormLabel(label: 'Call Duration (optional)'),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _DurationField(
+                              label: 'Min',
+                              value: _durationMinutes,
+                              max: 59,
+                              onChanged: (v) => setState(() => _durationMinutes = v),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _DurationField(
+                              label: 'Sec',
+                              value: _durationSeconds,
+                              max: 59,
+                              onChanged: (v) => setState(() => _durationSeconds = v),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _isSaving ? null : _saveNote,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.accent,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: _isSaving
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.save, size: 16),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'Save Note',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
     );
   }
 }

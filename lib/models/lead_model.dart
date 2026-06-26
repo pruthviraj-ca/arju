@@ -35,6 +35,10 @@ class LeadModel {
   /// ISO date-time string for the next scheduled follow-up, or null if unset.
   final String? followUpDateTime;
 
+  final String? lastCalledAt;
+  final String? lastCallNoteAt;
+  final String? statusChangedAt;
+
   /// Preview text of the most recent call note.
   final String lastNote;
 
@@ -77,6 +81,9 @@ class LeadModel {
     required this.lastTag,
     required this.followUpDate,
     this.followUpDateTime,
+    this.lastCalledAt,
+    this.lastCallNoteAt,
+    this.statusChangedAt,
     required this.lastNote,
     required this.isActive,
     required this.callDuration,
@@ -105,6 +112,9 @@ class LeadModel {
       lastTag: data['lastTag'] as String? ?? '',
       followUpDate: data['followUpDate'] as String? ?? 'none',
       followUpDateTime: data['followUpDateTime'] as String?,
+      lastCalledAt: data['lastCalledAt'] as String?,
+      lastCallNoteAt: data['lastCallNoteAt'] as String?,
+      statusChangedAt: data['statusChangedAt'] as String?,
       lastNote: data['lastNote'] as String? ?? '',
       isActive: data['isActive'] as bool? ?? true,
       callDuration: data['callDuration'] as String? ?? '—',
@@ -132,6 +142,9 @@ class LeadModel {
       'lastTag': lastTag,
       'followUpDate': followUpDate,
       'followUpDateTime': followUpDateTime,
+      'lastCalledAt': lastCalledAt,
+      'lastCallNoteAt': lastCallNoteAt,
+      'statusChangedAt': statusChangedAt,
       'lastNote': lastNote,
       'isActive': isActive,
       'callDuration': callDuration,
@@ -159,6 +172,9 @@ class LeadModel {
     String? lastTag,
     String? followUpDate,
     String? followUpDateTime,
+    String? lastCalledAt,
+    String? lastCallNoteAt,
+    String? statusChangedAt,
     String? lastNote,
     bool? isActive,
     String? callDuration,
@@ -180,6 +196,9 @@ class LeadModel {
       lastTag: lastTag ?? this.lastTag,
       followUpDate: followUpDate ?? this.followUpDate,
       followUpDateTime: followUpDateTime ?? this.followUpDateTime,
+      lastCalledAt: lastCalledAt ?? this.lastCalledAt,
+      lastCallNoteAt: lastCallNoteAt ?? this.lastCallNoteAt,
+      statusChangedAt: statusChangedAt ?? this.statusChangedAt,
       lastNote: lastNote ?? this.lastNote,
       isActive: isActive ?? this.isActive,
       callDuration: callDuration ?? this.callDuration,

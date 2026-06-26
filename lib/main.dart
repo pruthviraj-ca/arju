@@ -21,6 +21,9 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  // Initialize auth state from SharedPreferences
+  await AuthService.instance.initializeAuth();
+
   // 🌐 Allow GoogleFonts to fail gracefully on web (network issues)
   GoogleFonts.config.allowRuntimeFetching = true;
 
@@ -57,7 +60,7 @@ class MyApp extends StatelessWidget {
     return Sizer(
       builder: (context, orientation, screenType) {
         return MaterialApp(
-          title: 'truassets',
+          title: 'TruAssets',
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
           themeMode: ThemeMode.light,

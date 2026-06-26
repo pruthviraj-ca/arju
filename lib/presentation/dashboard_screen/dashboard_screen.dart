@@ -25,6 +25,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   List<Map<String, dynamic>> _callLogs = [];
   StreamSubscription? _leadsSub;
   StreamSubscription? _callLogsSub;
+  Timer? _refreshTimer;
 
   String? _pendingLeadId;
   String? _pendingSource;
@@ -52,6 +53,12 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     _callLogsSub = FirestoreService.instance.streamCallLogs().listen((logs) {
       if (mounted) setState(() => _callLogs = logs);
     });
+
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
   @override
@@ -59,6 +66,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     WidgetsBinding.instance.removeObserver(this);
     _leadsSub?.cancel();
     _callLogsSub?.cancel();
+    _refreshTimer?.cancel();
     super.dispose();
   }
 
@@ -377,6 +385,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           overdueLeads: _overdue,
           onCallNow: _onCallNow,
           initialBucket: expandBucket,
+          onReturn: () {
+            if (mounted) setState(() {});
+          },
         ),
         const SizedBox(height: 20),
         StatCardsWidget(
@@ -421,6 +432,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             overdueLeads: _overdue,
             onCallNow: _onCallNow,
             initialBucket: expandBucket,
+            onReturn: () {
+              if (mounted) setState(() {});
+            },
           ),
         ),
       ],
@@ -476,14 +490,26 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           'lastCalledAt': DateTime.now().toIso8601String(),
         };
 
+        String clientName = 'Lead';
+        String oldTemp = '';
         if (doc.exists) {
-          final temp = doc.data()?['leadTemperature'] as String?;
-          if (temp == null || temp.isEmpty) {
+          clientName = doc.data()?['clientName'] as String? ?? 'Lead';
+          oldTemp = doc.data()?['leadTemperature'] as String? ?? '';
+          if (oldTemp.isEmpty) {
             updates['leadTemperature'] = 'Cold';
           }
         }
 
         await leadDocRef.update(updates);
+
+        if (oldTemp.isEmpty) {
+          await FirestoreService.instance.logTemperatureChange(
+            leadId: leadId,
+            clientName: clientName,
+            oldTemp: '',
+            newTemp: 'Cold',
+          );
+        }
       }
     } catch (e) {
       debugPrint('Error updating lead call status: $e');

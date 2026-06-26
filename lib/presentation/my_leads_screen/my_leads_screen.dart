@@ -9,6 +9,7 @@ import '../../widgets/app_navigation.dart';
 import './widgets/lead_card_widget.dart';
 import './widgets/lead_filter_chips_widget.dart';
 import './widgets/lead_search_bar_widget.dart';
+import './my_leads_filter_session.dart';
 
 class MyLeadsScreen extends StatefulWidget {
   const MyLeadsScreen({super.key});
@@ -62,6 +63,7 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
         'createdAt': l.createdAt,
         'callsCount': l.callsCount,
         'leadTemperature': l.leadTemperature,
+        'leadSource': l.source,
       };
     }).toList();
   }
@@ -71,9 +73,10 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
     'New',
     'Called',
     'Follow-Up',
-    'Site Visit',
+    'SV Scheduled',
+    'Visited',
     'Won',
-    'Lost',
+    'Lost/Dead',
   ];
 
   final List<String> _tempFilters = [
@@ -85,15 +88,23 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
 
   final List<String> _tagFilters = [
     'All',
-    'Interested',
+    'Booked',
     'Callback',
-    'Site Visit Ready',
+    'Channel Partner',
+    'Closed with Colleague',
+    'Dropped Buying Plans',
+    'Finalised Elsewhere',
+    'Interested',
+    'Location Mismatch',
+    'Low Budget',
     'Not Answering',
     'Not Interested',
-    'Busy / Call Later',
-    'Postponed Buying',
+    'Not Responding',
+    'Postponed Buying Plan',
+    'Prospect',
+    'Site Visit Ready',
     'Source Inventory',
-    'Low Budget',
+    'Wrong Number',
   ];
 
   final List<String> _sortOptions = [
@@ -111,6 +122,16 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
     // Load VoIP config
     TwilioVoiceService.instance.loadConfig();
 
+    // Restore filters from session persistence
+    _searchController.text = MyLeadsFilterSession.searchQuery;
+    _searchQuery = MyLeadsFilterSession.searchQuery;
+    _selectedFilter = MyLeadsFilterSession.selectedFilter;
+    _selectedTagFilter = MyLeadsFilterSession.selectedTagFilter;
+    _selectedTempFilter = MyLeadsFilterSession.selectedTempFilter;
+    _sortBy = MyLeadsFilterSession.sortBy;
+    _selectedDateRange = MyLeadsFilterSession.selectedDateRange;
+    _isFilterExpanded = MyLeadsFilterSession.isFilterExpanded;
+
     _leadsSub = FirestoreService.instance.streamLeads().listen((leads) {
       if (mounted) {
         setState(() {
@@ -121,7 +142,10 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
     });
 
     _searchController.addListener(() {
-      setState(() => _searchQuery = _searchController.text);
+      setState(() {
+        _searchQuery = _searchController.text;
+        MyLeadsFilterSession.searchQuery = _searchQuery;
+      });
     });
   }
 
@@ -183,9 +207,10 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
         'New': ['new'],
         'Called': ['called'],
         'Follow-Up': ['follow-up'],
-        'Site Visit': ['site visit scheduled', 'site visit done'],
+        'SV Scheduled': ['site visit scheduled'],
+        'Visited': ['site visit done'],
         'Won': ['won'],
-        'Lost': ['lost/dead', 'lost', 'dead'],
+        'Lost/Dead': ['lost/dead', 'lost', 'dead'],
       };
       final targetStatuses = filterMap[_selectedFilter];
       if (targetStatuses != null) {
@@ -290,6 +315,8 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
       setState(() {
         _selectedDateRange = picked;
         _sortBy = 'Follow-Up Date';
+        MyLeadsFilterSession.selectedDateRange = picked;
+        MyLeadsFilterSession.sortBy = 'Follow-Up Date';
       });
     }
   }
@@ -312,6 +339,8 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
             setState(() {
               _sortBy = val;
               _selectedDateRange = null;
+              MyLeadsFilterSession.sortBy = val;
+              MyLeadsFilterSession.selectedDateRange = null;
             });
           }
         },
@@ -398,11 +427,15 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
               controller: _searchController,
               onClear: () {
                 _searchController.clear();
-                setState(() => _searchQuery = '');
+                setState(() {
+                  _searchQuery = '';
+                  MyLeadsFilterSession.searchQuery = '';
+                });
               },
               onFilterToggle: () {
                 setState(() {
                   _isFilterExpanded = !_isFilterExpanded;
+                  MyLeadsFilterSession.isFilterExpanded = _isFilterExpanded;
                 });
               },
               isFilterExpanded: _isFilterExpanded,
@@ -419,9 +452,18 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                 selectedStatus: _selectedFilter,
                 selectedTag: _selectedTagFilter,
                 selectedTemp: _selectedTempFilter,
-                onStatusChanged: (val) => setState(() => _selectedFilter = val),
-                onTagChanged: (val) => setState(() => _selectedTagFilter = val),
-                onTempChanged: (val) => setState(() => _selectedTempFilter = val),
+                onStatusChanged: (val) => setState(() {
+                  _selectedFilter = val;
+                  MyLeadsFilterSession.selectedFilter = val;
+                }),
+                onTagChanged: (val) => setState(() {
+                  _selectedTagFilter = val;
+                  MyLeadsFilterSession.selectedTagFilter = val;
+                }),
+                onTempChanged: (val) => setState(() {
+                  _selectedTempFilter = val;
+                  MyLeadsFilterSession.selectedTempFilter = val;
+                }),
               ),
               crossFadeState: _isFilterExpanded
                   ? CrossFadeState.showSecond
@@ -470,6 +512,7 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                         onTap: () {
                           setState(() {
                             _selectedDateRange = null;
+                            MyLeadsFilterSession.selectedDateRange = null;
                           });
                         },
                         child: Icon(
@@ -511,6 +554,7 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                           _selectedDateRange = null;
                           _searchController.clear();
                           _searchQuery = '';
+                          MyLeadsFilterSession.reset();
                         });
                       },
                       child: Row(
@@ -568,8 +612,13 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                                         setState(() {
                                           _selectedFilter = 'All';
                                           _selectedTagFilter = 'All';
+                                          _selectedTempFilter = 'All';
                                           _searchController.clear();
                                           _searchQuery = '';
+                                          MyLeadsFilterSession.selectedFilter = 'All';
+                                          MyLeadsFilterSession.selectedTagFilter = 'All';
+                                          MyLeadsFilterSession.selectedTempFilter = 'All';
+                                          MyLeadsFilterSession.searchQuery = '';
                                         });
                                       }
                                     : null,
@@ -691,11 +740,17 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
       }
 
       try {
-        final leadTemp = lead['leadTemperature'] as String?;
-        if (leadTemp == null || leadTemp.isEmpty) {
+        final leadTemp = lead['leadTemperature'] as String? ?? '';
+        if (leadTemp.isEmpty) {
           await FirestoreService.instance.updateLead(lead['id'] as String, {
             'leadTemperature': 'Cold',
           });
+          await FirestoreService.instance.logTemperatureChange(
+            leadId: lead['id'] as String,
+            clientName: lead['clientName'] as String? ?? 'Lead',
+            oldTemp: '',
+            newTemp: 'Cold',
+          );
         }
       } catch (e) {
         debugPrint('Error updating lead temperature: $e');
