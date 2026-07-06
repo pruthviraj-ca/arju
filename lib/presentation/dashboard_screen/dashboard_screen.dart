@@ -459,6 +459,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       // Navigate to Lead Detail after a small delay
       Future.delayed(const Duration(milliseconds: 500), () {
         if (mounted) {
+          final sortedIds = returnBucket != null ? _getSortedBucketLeadIds(returnBucket) : <String>[];
+          final currentIndex = sortedIds.indexOf(leadIdToNavigate);
           Navigator.pushNamed(
             context,
             AppRoutes.leadDetailScreen,
@@ -466,11 +468,49 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               'leadId': leadIdToNavigate,
               'returnTo': 'Dashboard',
               'returnBucket': returnBucket,
+              'source': 'dashboard_bucket',
+              'bucketLeads': sortedIds,
+              'currentIndex': currentIndex != -1 ? currentIndex : 0,
             },
           );
         }
       });
     }
+  }
+
+  List<String> _getSortedBucketLeadIds(String bucketTitle) {
+    List<Map<String, dynamic>> rawLeads = [];
+    switch (bucketTitle.toLowerCase()) {
+      case 'overdue':
+        rawLeads = _overdue;
+        break;
+      case 'due':
+        rawLeads = _due;
+        break;
+      case 'today':
+        rawLeads = _followUpToday;
+        break;
+      case 'tomorrow':
+        rawLeads = _followUpTomorrow;
+        break;
+    }
+    final sorted = List<Map<String, dynamic>>.from(rawLeads);
+    sorted.sort((a, b) {
+      final rawA = a['followUpDateTime'] as String? ?? '';
+      final rawB = b['followUpDateTime'] as String? ?? '';
+      
+      final DateTime maxDate = DateTime(3000, 1, 1);
+      
+      final DateTime dateA = rawA.isNotEmpty && rawA != 'none'
+          ? (DateTime.tryParse(rawA) ?? maxDate)
+          : maxDate;
+      final DateTime dateB = rawB.isNotEmpty && rawB != 'none'
+          ? (DateTime.tryParse(rawB) ?? maxDate)
+          : maxDate;
+          
+      return dateA.compareTo(dateB);
+    });
+    return sorted.map((l) => l['id'] as String).toList();
   }
 
   Future<void> _incrementCallCount(String leadId) async {

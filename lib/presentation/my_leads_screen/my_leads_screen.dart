@@ -642,7 +642,7 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
     return ListView.separated(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       itemCount: leads.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, idx) {
         return LeadCardWidget(
           lead: leads[idx],
@@ -668,7 +668,7 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
         }
 
         const horizontalPadding = 24.0;
-        const spacing = 12.0;
+        const spacing = 8.0;
         final maxContentWidth = screenWidth > 1400 ? 1400.0 : screenWidth;
         final totalSpacing = spacing * (crossAxisCount - 1);
         final cardWidth = (maxContentWidth - (horizontalPadding * 2) - totalSpacing) / crossAxisCount;

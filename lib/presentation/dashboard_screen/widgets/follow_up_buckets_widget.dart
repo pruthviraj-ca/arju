@@ -479,6 +479,7 @@ class _BucketPanel extends StatelessWidget {
                   },
                   itemBuilder: (context, index) {
                     final lead = bucket.leads[index];
+                    final bucketLeads = bucket.leads.map((l) => l['id'] as String).toList();
                     return _LeadRow(
                       lead: lead,
                       color: bucket.color,
@@ -486,6 +487,8 @@ class _BucketPanel extends StatelessWidget {
                       bucketTitle: bucket.title,
                       onCallNow: () => onCallNow(lead, bucket.title),
                       onReturn: onReturn,
+                      bucketLeads: bucketLeads,
+                      currentIndex: index,
                     );
                   },
                 ),
@@ -502,6 +505,8 @@ class _LeadRow extends StatelessWidget {
   final String bucketTitle;
   final VoidCallback onCallNow;
   final VoidCallback? onReturn;
+  final List<String> bucketLeads;
+  final int currentIndex;
 
   const _LeadRow({
     required this.lead,
@@ -509,6 +514,8 @@ class _LeadRow extends StatelessWidget {
     required this.isToday,
     required this.bucketTitle,
     required this.onCallNow,
+    required this.bucketLeads,
+    required this.currentIndex,
     this.onReturn,
   });
 
@@ -713,6 +720,9 @@ class _LeadRow extends StatelessWidget {
                           'leadId': lead['id'] as String,
                           'returnTo': 'Dashboard',
                           'returnBucket': bucketTitle,
+                          'source': 'dashboard_bucket',
+                          'bucketLeads': bucketLeads,
+                          'currentIndex': currentIndex,
                         },
                       );
                       if (onReturn != null) {
@@ -738,6 +748,9 @@ class _LeadRow extends StatelessWidget {
             'leadId': lead['id'] as String,
             'returnTo': 'Dashboard',
             'returnBucket': bucketTitle,
+            'source': 'dashboard_bucket',
+            'bucketLeads': bucketLeads,
+            'currentIndex': currentIndex,
           },
         );
         if (onReturn != null) {

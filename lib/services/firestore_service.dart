@@ -11,6 +11,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/lead_model.dart';
 import '../models/note_model.dart';
 import '../models/site_visit_model.dart';
+import '../models/project_model.dart';
+import '../models/tower_model.dart';
+import '../models/unit_model.dart';
 import 'auth_service.dart';
 
 /// Singleton service for all Firestore database operations.
@@ -231,11 +234,30 @@ class FirestoreService {
   ///
   /// [leadId] - The parent lead's Firestore document ID.
   /// [note]   - The [NoteModel] to persist. Empty IDs receive auto-generated IDs.
+  /// For new notes, `serverCreatedAt` is set to the Firestore server timestamp
+  /// so the 15-minute edit window uses tamper-proof server time.
   Future<void> addNote(String leadId, NoteModel note) async {
     final noteRef = note.id.isEmpty
         ? _leadsRef().doc(leadId).collection('notes').doc()
         : _leadsRef().doc(leadId).collection('notes').doc(note.id);
-    await noteRef.set(note.toMap());
+    final data = note.toMap();
+    // Set server timestamp for new notes only
+    if (note.id.isEmpty) {
+      data['serverCreatedAt'] = FieldValue.serverTimestamp();
+    }
+    await noteRef.set(data);
+  }
+
+  /// Updates only the text of an existing note and marks it as edited.
+  ///
+  /// [leadId] - The parent lead's Firestore document ID.
+  /// [noteId] - The Firestore document ID of the note to update.
+  /// [newText] - The new body text for the note.
+  Future<void> updateNoteText(String leadId, String noteId, String newText) async {
+    await _leadsRef().doc(leadId).collection('notes').doc(noteId).update({
+      'text': newText,
+      'isEdited': true,
+    });
   }
 
   /// Logs a temperature change for a lead as an auto-log NoteModel in the notes sub-collection.
@@ -283,6 +305,194 @@ class FirestoreService {
     );
 
     await addNote(leadId, autoNote);
+  }
+
+  /// Updates a lead's status in the database and creates a corresponding timeline log entry.
+  /// If the status hasn't changed, this is a no-op.
+  Future<void> updateLeadStatus({
+    required String leadId,
+    required String newStatus,
+    required String triggeredBy,
+    String? context,
+    String? clientName,
+    String? oldStatus,
+    Map<String, dynamic>? additionalUpdates,
+  }) async {
+    if (_uid == null) return;
+    
+    String currentStatus = oldStatus ?? '';
+    String name = clientName ?? 'Lead';
+    String currentTemp = '';
+
+    // If we don't have the old status or client name, fetch the lead document
+    if (oldStatus == null || clientName == null) {
+      final leadDoc = await _leadsRef().doc(leadId).get();
+      if (!leadDoc.exists) return;
+      final lead = LeadModel.fromFirestore(leadDoc);
+      currentStatus = lead.status;
+      name = lead.clientName;
+      currentTemp = lead.leadTemperature;
+    } else {
+      // Still need temperature for auto-update if status becomes won/lost
+      final leadDoc = await _leadsRef().doc(leadId).get();
+      if (leadDoc.exists) {
+        currentTemp = leadDoc.data()?['leadTemperature'] as String? ?? '';
+      }
+    }
+
+    final newStatusLower = newStatus.toLowerCase();
+    if (currentStatus.toLowerCase() == newStatusLower) {
+      // Deduplication guard
+      return;
+    }
+
+    // Determine temperature changes based on status (e.g. Won/Lost clears temp)
+    final isWonOrLost = newStatusLower == 'won' || 
+                        newStatusLower == 'lost' || 
+                        newStatusLower == 'dead' || 
+                        newStatusLower == 'lost/dead';
+    final targetTemp = isWonOrLost ? '' : currentTemp;
+
+    final updates = {
+      'status': newStatus,
+      'leadTemperature': targetTemp,
+      'statusChangedAt': DateTime.now().toIso8601String(),
+      ...?additionalUpdates,
+    };
+    await updateLead(leadId, updates);
+
+    // Create temperature log if changed
+    if (currentTemp != targetTemp) {
+      await logTemperatureChange(
+        leadId: leadId,
+        clientName: name,
+        oldTemp: currentTemp,
+        newTemp: targetTemp,
+      );
+    }
+
+    // Create timeline status change log entry
+    final tag = _statusLogTag(newStatusLower);
+    final text = _statusLogText(newStatusLower, name, triggeredBy, context);
+
+    final now = DateTime.now();
+    final createdAt =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    final autoNote = NoteModel(
+      id: '',
+      text: text,
+      tag: tag,
+      callDuration: '',
+      createdAt: createdAt,
+      isAutoLog: true,
+    );
+
+    await addNote(leadId, autoNote);
+  }
+
+  /// Updates a lead's temperature tag in the database and creates a corresponding timeline log entry.
+  /// If the temperature hasn't changed, this is a no-op.
+  Future<void> updateLeadTemperature({
+    required String leadId,
+    required String newTemp,
+    required String triggeredBy,
+    String? clientName,
+    String? oldTemp,
+  }) async {
+    if (_uid == null) return;
+
+    String currentTemp = oldTemp ?? '';
+    String name = clientName ?? 'Lead';
+
+    if (oldTemp == null || clientName == null) {
+      final leadDoc = await _leadsRef().doc(leadId).get();
+      if (!leadDoc.exists) return;
+      final lead = LeadModel.fromFirestore(leadDoc);
+      currentTemp = lead.leadTemperature;
+      name = lead.clientName;
+    }
+
+    if (currentTemp == newTemp) {
+      // Deduplication guard
+      return;
+    }
+
+    await updateLead(leadId, {'leadTemperature': newTemp});
+
+    await logTemperatureChange(
+      leadId: leadId,
+      clientName: name,
+      oldTemp: currentTemp,
+      newTemp: newTemp,
+    );
+  }
+
+  String _statusLogTag(String statusLower) {
+    switch (statusLower) {
+      case 'new':
+        return 'Status: New';
+      case 'called':
+        return 'Status: Called';
+      case 'follow-up':
+        return 'Status: Follow-Up';
+      case 'site visit scheduled':
+        return 'Site Visit Scheduled';
+      case 'site visit done':
+      case 'visited':
+        return 'Site Visit Completed';
+      case 'won':
+        return 'Status: Won';
+      case 'lost':
+      case 'lost/dead':
+        return 'Status: Lost/Dead';
+      default:
+        return 'Status Changed';
+    }
+  }
+
+  String _statusLogText(String statusLower, String clientName, String triggeredBy, String? context) {
+    final statusLabel = _statusLabel(statusLower);
+    switch (triggeredBy) {
+      case 'manual':
+        return '$clientName status set to $statusLabel';
+      case 'outcome_tag':
+        return '$clientName status set to $statusLabel (via outcome: ${context ?? ''})';
+      case 'site_visit_completed':
+        return '$clientName status set to $statusLabel (Site Visit Completed)';
+      case 'site_visit_missed':
+        return '$clientName status set to $statusLabel (Site Visit Missed)';
+      case 'site_visit_scheduled':
+        return '$clientName status set to $statusLabel (Site Visit Scheduled)';
+      case 'site_visit_rescheduled':
+        return '$clientName status set to $statusLabel (Site Visit Rescheduled)';
+      default:
+        return '$clientName status set to $statusLabel';
+    }
+  }
+
+  String _statusLabel(String s) {
+    switch (s.toLowerCase()) {
+      case 'new':
+        return 'New';
+      case 'called':
+        return 'Called';
+      case 'follow-up':
+        return 'Follow-Up';
+      case 'site visit scheduled':
+        return 'SV Scheduled';
+      case 'site visit done':
+      case 'visited':
+        return 'Site Visit Done';
+      case 'won':
+        return 'Won';
+      case 'lost':
+      case 'lost/dead':
+        return 'Lost / Dead';
+      default:
+        return s;
+    }
   }
 
 
@@ -431,5 +641,136 @@ class FirestoreService {
       }
     }
     return duplicate;
+  }
+
+  // ─── Projects (Inventory) ─────────────────────────────────────────────────
+
+  /// Returns the projects collection reference for the current user.
+  CollectionReference<Map<String, dynamic>> _projectsRef() {
+    if (_uid == null) throw Exception('User not authenticated');
+    return _db.collection('users').doc(_uid).collection('projects');
+  }
+
+  /// Streams all projects for the current user, ordered by name.
+  Stream<List<ProjectModel>> streamProjects() {
+    if (_uid == null) return Stream.value([]);
+    return _projectsRef()
+        .orderBy('name')
+        .snapshots()
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => ProjectModel.fromFirestore(doc)).toList());
+  }
+
+  /// Creates or overwrites a project document.
+  Future<String> addProject(ProjectModel project) async {
+    final ref = project.id.isEmpty
+        ? _projectsRef().doc()
+        : _projectsRef().doc(project.id);
+    await ref.set(project.toMap());
+    return ref.id;
+  }
+
+  /// Partially updates a project document.
+  Future<void> updateProject(String projectId, Map<String, dynamic> updates) async {
+    await _projectsRef().doc(projectId).update(updates);
+  }
+
+  /// Deletes a project document.
+  Future<void> deleteProject(String projectId) async {
+    await _projectsRef().doc(projectId).delete();
+  }
+
+  /// Finds a project by name (case-insensitive match).
+  /// Returns the first match, or null if not found.
+  Future<ProjectModel?> getProjectByName(String name) async {
+    if (_uid == null || name.isEmpty) return null;
+    final snapshot = await _projectsRef().get();
+    final nameLower = name.toLowerCase().trim();
+    for (final doc in snapshot.docs) {
+      final project = ProjectModel.fromFirestore(doc);
+      if (project.name.toLowerCase().trim() == nameLower) {
+        return project;
+      }
+    }
+    return null;
+  }
+
+  // ─── Towers (Sub-collection under Project) ────────────────────────────────
+
+  /// Returns the towers sub-collection reference for a project.
+  CollectionReference<Map<String, dynamic>> _towersRef(String projectId) {
+    return _projectsRef().doc(projectId).collection('towers');
+  }
+
+  /// Streams all towers for a given project.
+  Stream<List<TowerModel>> streamTowers(String projectId) {
+    if (_uid == null) return Stream.value([]);
+    return _towersRef(projectId)
+        .orderBy('towerName')
+        .snapshots()
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => TowerModel.fromFirestore(doc)).toList());
+  }
+
+  /// Batch-creates multiple towers in a single write.
+  Future<List<String>> addTowersBatch(String projectId, List<TowerModel> towers) async {
+    final batch = _db.batch();
+    final ids = <String>[];
+    for (final tower in towers) {
+      final ref = tower.id.isEmpty
+          ? _towersRef(projectId).doc()
+          : _towersRef(projectId).doc(tower.id);
+      batch.set(ref, tower.toMap());
+      ids.add(ref.id);
+    }
+    await batch.commit();
+    return ids;
+  }
+
+  /// Updates a single tower document.
+  Future<void> updateTower(String projectId, String towerId, Map<String, dynamic> updates) async {
+    await _towersRef(projectId).doc(towerId).update(updates);
+  }
+
+  // ─── Units (Sub-collection under Project) ─────────────────────────────────
+
+  /// Returns the units sub-collection reference for a project.
+  CollectionReference<Map<String, dynamic>> _unitsRef(String projectId) {
+    return _projectsRef().doc(projectId).collection('units');
+  }
+
+  /// Streams all units for a given project, ordered by unit number.
+  Stream<List<UnitModel>> streamUnits(String projectId) {
+    if (_uid == null) return Stream.value([]);
+    return _unitsRef(projectId)
+        .orderBy('unitNumber')
+        .snapshots()
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => UnitModel.fromFirestore(doc)).toList());
+  }
+
+  /// Batch-creates multiple units. Firestore limits batches to 500,
+  /// so this splits into chunks for large projects.
+  Future<void> addUnitsBatch(String projectId, List<UnitModel> units) async {
+    const batchLimit = 499;
+    for (int i = 0; i < units.length; i += batchLimit) {
+      final chunk = units.sublist(
+        i,
+        i + batchLimit > units.length ? units.length : i + batchLimit,
+      );
+      final batch = _db.batch();
+      for (final unit in chunk) {
+        final ref = unit.id.isEmpty
+            ? _unitsRef(projectId).doc()
+            : _unitsRef(projectId).doc(unit.id);
+        batch.set(ref, unit.toMap());
+      }
+      await batch.commit();
+    }
+  }
+
+  /// Updates a single unit document (status, price, notes, booking link).
+  Future<void> updateUnit(String projectId, String unitId, Map<String, dynamic> updates) async {
+    await _unitsRef(projectId).doc(unitId).update(updates);
   }
 }

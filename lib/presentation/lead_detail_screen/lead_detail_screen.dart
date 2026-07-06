@@ -13,10 +13,12 @@ import 'dart:async';
 import '../../widgets/status_badge_widget.dart';
 import '../../models/lead_model.dart';
 import '../../models/note_model.dart';
+import '../../models/unit_model.dart';
 import '../../services/firestore_service.dart';
 import './widgets/call_note_card_widget.dart';
 import './widgets/add_note_form_widget.dart';
 import './widgets/site_visit_scheduler_widget.dart';
+import './widgets/inventory_snapshot_widget.dart';
 import '../../utils/tag_colors.dart';
 
 class LeadDetailScreen extends StatefulWidget {
@@ -27,16 +29,22 @@ class LeadDetailScreen extends StatefulWidget {
 }
 
 class _LeadDetailScreenState extends State<LeadDetailScreen> {
-  String? _leadId;
+  StreamSubscription? _leadSub;
+  StreamSubscription? _notesSub;
+  List<String> _bucketLeads = [];
+  int _currentIndex = 0;
+  bool _isFromBucket = false;
+  double _dragStartX = 0;
+  double _dragEndX = 0;
+
   LeadModel? _leadModel;
-  List<NoteModel> _notes = [];
-  bool _initialized = false;
-  bool _isEditingStatus = false;
+  String? _leadId;
   String? _origin;
   String? _returnTo;
   String? _returnBucket;
-  StreamSubscription? _leadSub;
-  StreamSubscription? _notesSub;
+  List<NoteModel> _notes = [];
+  bool _initialized = false;
+  bool _isEditingStatus = false;
 
   // Pre-fill from dialer
   String _dialerNoteText = '';
@@ -97,6 +105,9 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         _origin = args['origin'] as String?;
         _returnTo = args['returnTo'] as String?;
         _returnBucket = args['returnBucket'] as String?;
+        _bucketLeads = List<String>.from(args['bucketLeads'] ?? <String>[]);
+        _currentIndex = args['currentIndex'] as int? ?? 0;
+        _isFromBucket = args['source'] == 'dashboard_bucket';
       } else if (args is String) {
         _leadId = args;
       }
@@ -110,6 +121,48 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
       }
       _initialized = true;
     }
+  }
+
+  void _navigateToLeadAtIndex(int index) {
+    if (index < 0 || index >= _bucketLeads.length) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(index < 0 ? 'First lead reached' : 'Last lead reached'),
+          duration: const Duration(milliseconds: 500),
+        ),
+      );
+      return;
+    }
+    
+    final String nextLeadId = _bucketLeads[index];
+    
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => const LeadDetailScreen(),
+        settings: RouteSettings(
+          arguments: {
+            'leadId': nextLeadId,
+            'origin': _origin,
+            'returnTo': _returnTo,
+            'returnBucket': _returnBucket,
+            'source': 'dashboard_bucket',
+            'bucketLeads': _bucketLeads,
+            'currentIndex': index,
+          },
+        ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final bool isNext = index > _currentIndex;
+          final Offset begin = isNext ? const Offset(1.0, 0.0) : const Offset(-1.0, 0.0);
+          const Offset end = Offset.zero;
+          final Animatable<Offset> tween = Tween(begin: begin, end: end).chain(CurveTween(curve: Curves.easeOutCubic));
+          return SlideTransition(
+            position: animation.drive(tween),
+            child: child,
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -198,107 +251,152 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
 
   void _updateStatus(String newStatus) async {
     if (_leadModel == null) return;
-    final oldStatus = _leadModel!.status;
     final newStatusLower = newStatus.toLowerCase();
 
-    // Skip logging if status didn't actually change
-    if (oldStatus.toLowerCase() == newStatusLower) {
-      setState(() => _isEditingStatus = false);
-      return;
-    }
-
-    final isWonOrLost = newStatusLower == 'won' || 
-                        newStatusLower == 'lost' || 
-                        newStatusLower == 'dead' || 
-                        newStatusLower == 'lost/dead';
-
-    final oldTemp = _leadModel!.leadTemperature;
-    final targetTemp = isWonOrLost ? '' : oldTemp;
-
-    final updated = _leadModel!.copyWith(
-      status: newStatus,
-      leadTemperature: targetTemp,
-      statusChangedAt: DateTime.now().toIso8601String(),
+    await FirestoreService.instance.updateLeadStatus(
+      leadId: _leadModel!.id,
+      newStatus: newStatus,
+      triggeredBy: 'manual',
+      clientName: _leadModel!.clientName,
+      oldStatus: _leadModel!.status,
     );
-    await FirestoreService.instance.addLead(updated);
-
-    if (oldTemp != targetTemp) {
-      await FirestoreService.instance.logTemperatureChange(
-        leadId: _leadModel!.id,
-        clientName: _leadModel!.clientName,
-        oldTemp: oldTemp,
-        newTemp: targetTemp,
-      );
-    }
-
-    // ── Create auto-log timeline entry for this status change ──
-    final clientName = _leadModel!.clientName;
-    final tag = _statusLogTag(newStatusLower);
-    final text = _statusLogText(newStatusLower, clientName);
-
-    final now = DateTime.now();
-    final createdAt =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-
-    final autoNote = NoteModel(
-      id: '',
-      text: text,
-      tag: tag,
-      callDuration: '',
-      createdAt: createdAt,
-      isAutoLog: true,
-    );
-    await FirestoreService.instance.addNote(_leadModel!.id, autoNote);
 
     setState(() {
       _isEditingStatus = false;
     });
-  }
 
-  /// Returns the tag label for a status-change log entry.
-  String _statusLogTag(String statusLower) {
-    switch (statusLower) {
-      case 'new':
-        return 'Status: New';
-      case 'called':
-        return 'Status: Called';
-      case 'follow-up':
-        return 'Status: Follow-Up';
-      case 'site visit scheduled':
-        return 'Site Visit Scheduled';
-      case 'site visit done':
-        return 'Site Visit Completed';
-      case 'won':
-        return 'Status: Won';
-      case 'lost/dead':
-        return 'Status: Lost/Dead';
-      default:
-        return 'Status Changed';
+    // Check if we can link unit when status is Won
+    if (newStatusLower == 'won') {
+      final propName = _leadModel!.property;
+      final project = await FirestoreService.instance.getProjectByName(propName);
+      if (project != null) {
+        await _promptUnitLink(project.id, project.name);
+      }
     }
   }
 
-  /// Returns the description text for a status-change log entry.
-  String _statusLogText(String statusLower, String clientName) {
-    switch (statusLower) {
-      case 'new':
-        return '$clientName status set to New';
-      case 'called':
-        return '$clientName status set to Called';
-      case 'follow-up':
-        return '$clientName status set to Follow-Up';
-      case 'site visit scheduled':
-        return '$clientName scheduled site visit';
-      case 'site visit done':
-        return '$clientName completed site visit';
-      case 'won':
-        return '$clientName marked as Won';
-      case 'lost/dead':
-        return '$clientName marked as Lost/Dead';
-      default:
-        return '$clientName status changed to $statusLower';
+  Future<void> _promptUnitLink(String projectId, String projectName) async {
+    final units = await FirestoreService.instance.streamUnits(projectId).first;
+    final availableUnits = units.where((u) => u.availabilityStatus == 'Available').toList();
+
+    if (!mounted) return;
+
+    if (availableUnits.isEmpty) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Colors.white,
+          title: Text('No Available Units', style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
+          content: Text('There are no available units in $projectName to link this booking to.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
     }
+
+    UnitModel? selectedUnit;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              title: Text('Link Booking to Unit', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 16)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Link this booking to a unit in $projectName?',
+                    style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<UnitModel>(
+                    value: selectedUnit,
+                    dropdownColor: Colors.white,
+                    hint: Text('Select available unit', style: GoogleFonts.inter(fontSize: 13)),
+                    isExpanded: true,
+                    items: availableUnits.map((u) {
+                      return DropdownMenuItem(
+                        value: u,
+                        child: Text('${u.unitNumber} (${u.bhkType} · ${u.facing})', style: GoogleFonts.inter(fontSize: 13)),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      setDialogState(() {
+                        selectedUnit = val;
+                      });
+                    },
+                    decoration: InputDecoration(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: Text('Skip', style: GoogleFonts.inter(color: AppTheme.mutedText)),
+                ),
+                ElevatedButton(
+                  onPressed: selectedUnit == null
+                      ? null
+                      : () async {
+                          Navigator.pop(dialogCtx);
+                          try {
+                            await FirestoreService.instance.updateUnit(
+                              projectId,
+                              selectedUnit!.id,
+                              {
+                                'availabilityStatus': 'Booked',
+                                'bookingLeadId': _leadId,
+                                'updatedAt': DateTime.now().toIso8601String(),
+                              },
+                            );
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  backgroundColor: AppTheme.success,
+                                  content: Text('Unit ${selectedUnit!.unitNumber} linked successfully!'),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  backgroundColor: AppTheme.error,
+                                  content: Text('Failed to link unit: $e'),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: Text('Link Unit', style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
+
+
 
   void _showEditLeadModal() {
     if (_leadModel == null) return;
@@ -423,6 +521,10 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         'followUpDateTime': n.followUpDateTime,
         'callDuration': n.callDuration,
         'createdAt': _formatCreatedAt(n.createdAt),
+        'isAutoLog': n.isAutoLog,
+        'rawCreatedAt': n.createdAt,
+        'isEdited': n.isEdited,
+        'serverCreatedAt': n.serverCreatedAt,
       };
     }).toList();
     final rawTag = _lead['lastTag'] as String? ?? '';
@@ -434,19 +536,23 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
     final leadAdded = _formatDateOnly(_lead['createdAt'] as String? ?? '—');
 
     void goBack() {
-      if (_returnTo == 'Dashboard') {
-        Navigator.pushNamedAndRemoveUntil(
-          context,
-          AppRoutes.dashboardScreen,
-          (route) => false,
-          arguments: {
-            'expandBucket': _returnBucket,
-          },
-        );
-      } else if (_origin == AppRoutes.siteVisitsScreen) {
-        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.siteVisitsScreen, (route) => false);
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context);
       } else {
-        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.myLeadsScreen, (route) => false);
+        if (_returnTo == 'Dashboard') {
+          Navigator.pushNamedAndRemoveUntil(
+            context,
+            AppRoutes.dashboardScreen,
+            (route) => false,
+            arguments: {
+              'expandBucket': _returnBucket,
+            },
+          );
+        } else if (_origin == AppRoutes.siteVisitsScreen) {
+          Navigator.pushNamedAndRemoveUntil(context, AppRoutes.siteVisitsScreen, (route) => false);
+        } else {
+          Navigator.pushNamedAndRemoveUntil(context, AppRoutes.myLeadsScreen, (route) => false);
+        }
       }
     }
 
@@ -468,13 +574,39 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _lead['clientName'] as String,
-              style: GoogleFonts.inter(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: AppTheme.darkText,
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    _lead['clientName'] as String,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.darkText,
+                    ),
+                  ),
+                ),
+                if (_isFromBucket) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '${_currentIndex + 1} / ${_bucketLeads.length}',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
             Text(
               _lead['property'] as String,
@@ -498,76 +630,121 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
           child: Container(height: 1, color: AppTheme.borderColor),
         ),
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-            // ── Left column content (stacked on mobile) ──────────────────────
-            _ClientInfoCard(
-              lead: _lead,
-              createdAt: createdAt,
-              leadAdded: leadAdded,
-              followUp: followUp,
-              tag: tag,
-              isEditingStatus: _isEditingStatus,
-              statuses: _statuses,
-              onEditStatus: () =>
-                  setState(() => _isEditingStatus = !_isEditingStatus),
-              onStatusChanged: _updateStatus,
-              onTempChanged: (temp) async {
-                if (_leadModel != null) {
-                  final oldTemp = _leadModel!.leadTemperature;
-                  if (oldTemp != temp) {
-                    final updated = _leadModel!.copyWith(leadTemperature: temp);
-                    await FirestoreService.instance.addLead(updated);
-                    await FirestoreService.instance.logTemperatureChange(
-                      leadId: _leadModel!.id,
-                      clientName: _leadModel!.clientName,
-                      oldTemp: oldTemp,
-                      newTemp: temp,
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragStart: _isFromBucket ? (details) {
+          _dragStartX = details.globalPosition.dx;
+          _dragEndX = details.globalPosition.dx;
+        } : null,
+        onHorizontalDragUpdate: _isFromBucket ? (details) {
+          _dragEndX = details.globalPosition.dx;
+        } : null,
+        onHorizontalDragEnd: _isFromBucket ? (details) {
+          final double difference = _dragEndX - _dragStartX;
+          if (difference.abs() > 80) {
+            if (difference > 0) {
+              _navigateToLeadAtIndex(_currentIndex - 1);
+            } else {
+              _navigateToLeadAtIndex(_currentIndex + 1);
+            }
+          }
+        } : null,
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+              // ── Left column content (stacked on mobile) ──────────────────────
+              _ClientInfoCard(
+                lead: _lead,
+                createdAt: createdAt,
+                leadAdded: leadAdded,
+                followUp: followUp,
+                tag: tag,
+                isEditingStatus: _isEditingStatus,
+                statuses: _statuses,
+                onEditStatus: () =>
+                    setState(() => _isEditingStatus = !_isEditingStatus),
+                onStatusChanged: _updateStatus,
+                onTempChanged: (temp) async {
+                  if (_leadModel != null) {
+                    final oldTemp = _leadModel!.leadTemperature;
+                    if (oldTemp != temp) {
+                      final updated = _leadModel!.copyWith(leadTemperature: temp);
+                      await FirestoreService.instance.addLead(updated);
+                      await FirestoreService.instance.logTemperatureChange(
+                        leadId: _leadModel!.id,
+                        clientName: _leadModel!.clientName,
+                        oldTemp: oldTemp,
+                        newTemp: temp,
+                      );
+                    }
+                  }
+                },
+                onCall: _openDialer,
+                onPropertyTap: () async {
+                  final propName = _lead['property'] as String? ?? '';
+                  final project = await FirestoreService.instance.getProjectByName(propName);
+                  if (project != null && context.mounted) {
+                    Navigator.pushNamed(
+                      context,
+                      AppRoutes.projectDetailScreen,
+                      arguments: {'projectId': project.id},
+                    );
+                  } else if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Project not found in Inventory')),
                     );
                   }
-                }
-              },
-              onCall: _openDialer,
-            ),
-            const SizedBox(height: 16),
-
-            // ── 1. Add Call Note form — top, for quick logging ───────────────
-            AddNoteFormWidget(
-              key: _addNoteFormKey,
-              leadId: _lead['id'] as String,
-              onNoteSaved: _refreshLead,
-            ),
-            const SizedBox(height: 16),
-
-            // ── 2. Call Notes Timeline — second ─────────────────────────────
-            _SectionTitle(
-              icon: 'history',
-              title: 'Call Notes Timeline',
-              count: mappedNotes.length,
-            ),
-            const SizedBox(height: 12),
-            if (mappedNotes.isEmpty)
-              _EmptyNotes()
-            else
-              ...mappedNotes.map((n) => CallNoteCardWidget(note: n)),
-
-            const SizedBox(height: 16),
-
-            // ── 3. Schedule Site Visit — last, button only (hidden for closed) ─
-            if (!_isClosed) ...[
-              SiteVisitSchedulerWidget(
-                leadId: _lead['id'] as String,
-                clientName: _lead['clientName'] as String,
-                defaultProperty: _lead['property'] as String,
-                onScheduled: _refreshLead,
+                },
               ),
+              const SizedBox(height: 16),
+              InventorySnapshotWidget(
+                projectName: _lead['property'] as String? ?? '',
+              ),
+              const SizedBox(height: 16),
+
+              // ── 1. Add Call Note form — top, for quick logging ───────────────
+              AddNoteFormWidget(
+                key: _addNoteFormKey,
+                leadId: _lead['id'] as String,
+                onNoteSaved: _refreshLead,
+              ),
+              const SizedBox(height: 16),
+
+              // ── 2. Call Notes Timeline — second ─────────────────────────────
+              _SectionTitle(
+                icon: 'history',
+                title: 'Call Notes Timeline',
+                count: mappedNotes.length,
+              ),
+              const SizedBox(height: 12),
+              if (mappedNotes.isEmpty)
+                _EmptyNotes()
+              else
+                ...mappedNotes.map((n) => CallNoteCardWidget(
+                  note: n,
+                  leadId: _lead['id'] as String,
+                  isAutoLog: n['isAutoLog'] as bool? ?? false,
+                  rawCreatedAt: n['rawCreatedAt'] as String? ?? '',
+                  isEdited: n['isEdited'] as bool? ?? false,
+                )),
+
+              const SizedBox(height: 16),
+
+              // ── 3. Schedule Site Visit — last, button only (hidden for closed) ─
+              if (!_isClosed) ...[
+                SiteVisitSchedulerWidget(
+                  leadId: _lead['id'] as String,
+                  clientName: _lead['clientName'] as String,
+                  defaultProperty: _lead['property'] as String,
+                  onScheduled: _refreshLead,
+                ),
+              ],
+              const SizedBox(height: 24),
             ],
-            const SizedBox(height: 24),
-          ],
+          ),
         ),
       ),
     ),
@@ -589,6 +766,7 @@ class _ClientInfoCard extends StatefulWidget {
   final ValueChanged<String> onStatusChanged;
   final ValueChanged<String> onTempChanged;
   final VoidCallback onCall;
+  final VoidCallback? onPropertyTap;
 
   const _ClientInfoCard({
     required this.lead,
@@ -602,6 +780,7 @@ class _ClientInfoCard extends StatefulWidget {
     required this.onStatusChanged,
     required this.onTempChanged,
     required this.onCall,
+    this.onPropertyTap,
   });
 
   @override
@@ -844,6 +1023,7 @@ Team TruAssets
             icon: 'apartment',
             label: 'Property',
             value: widget.lead['property'] as String,
+            onTap: widget.onPropertyTap,
           ),
           if (widget.lead['alternatePhone'] != null && (widget.lead['alternatePhone'] as String).isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -1158,12 +1338,14 @@ class _InfoRow extends StatelessWidget {
   final String label;
   final String value;
   final TextOverflow? overflow;
+  final VoidCallback? onTap;
 
   const _InfoRow({
     required this.icon,
     required this.label,
     required this.value,
     this.overflow = TextOverflow.ellipsis,
+    this.onTap,
   });
 
   @override
@@ -1181,14 +1363,19 @@ class _InfoRow extends StatelessWidget {
           style: GoogleFonts.inter(fontSize: 12, color: AppTheme.mutedText),
         ),
         Expanded(
-          child: Text(
-            value,
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.darkText,
+          child: GestureDetector(
+            onTap: onTap,
+            behavior: HitTestBehavior.opaque,
+            child: Text(
+              value,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: onTap != null ? AppTheme.primary : AppTheme.darkText,
+                decoration: onTap != null ? TextDecoration.underline : null,
+              ),
+              overflow: overflow,
             ),
-            overflow: overflow,
           ),
         ),
       ],
@@ -1437,6 +1624,8 @@ class _EditLeadModalState extends State<_EditLeadModal> {
                 keyboardType: TextInputType.phone,
                 style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
                 decoration: _inputDecoration('Alternate Phone (optional)', Icons.phone_android),
+                textCapitalization: TextCapitalization.none,
+                autocorrect: false,
               ),
               const SizedBox(height: 16),
 
@@ -1453,6 +1642,10 @@ class _EditLeadModalState extends State<_EditLeadModal> {
               TextFormField(
                 controller: _emailCtrl,
                 readOnly: widget.lead.emailEditCount >= 1,
+                keyboardType: TextInputType.emailAddress,
+                autocorrect: false,
+                textCapitalization: TextCapitalization.none,
+                autofillHints: const [AutofillHints.email],
                 style: GoogleFonts.inter(
                   fontSize: 14,
                   color: widget.lead.emailEditCount >= 1

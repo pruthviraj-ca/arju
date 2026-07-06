@@ -65,6 +65,16 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
     return !isActive || status == 'lost/dead' || status == 'lost' || status == 'dead' || status == 'won';
   }
 
+  bool get _isWon {
+    final status = (widget.lead['status'] as String? ?? '').toLowerCase();
+    return status == 'won';
+  }
+
+  bool get _isLost {
+    final status = (widget.lead['status'] as String? ?? '').toLowerCase();
+    return status == 'lost/dead' || status == 'lost' || status == 'dead';
+  }
+
   bool get _isOverdue {
     if (_isClosed) return false;
     final fu = widget.lead['followUpDate'] as String?;
@@ -119,12 +129,9 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
 
   Widget _buildCallCountBadge(int callsCount) {
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 8,
-        vertical: 2,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(
-        color: AppTheme.primaryContainer,
+        color: const Color(0xFFEEF2F7),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
@@ -196,6 +203,32 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
     );
   }
 
+  /// Circular green call button (38px), matching Dashboard style.
+  Widget _buildCircularCallButton() {
+    return GestureDetector(
+      onTap: widget.onCallNow,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          color: AppTheme.success,
+          borderRadius: BorderRadius.circular(19),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.success.withAlpha(60),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: const Center(
+          child: Icon(Icons.call, size: 18, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final lead = widget.lead;
@@ -204,6 +237,253 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
     final hasTag = (lead['lastTag'] as String? ?? '').isNotEmpty;
     final followUpLabel = _followUpLabel;
     final isOverdueFlag = _isOverdue;
+    final callsCount = lead['callsCount'] as int? ?? 0;
+    final statusColor = AppTheme.getStatusColor(status);
+
+    // Determine left border color for won/lost
+    Color? leftBorderColor;
+    if (_isWon) {
+      leftBorderColor = AppTheme.success;
+    }
+
+    // Muted opacity for lost leads
+    final cardOpacity = _isLost ? 0.75 : 1.0;
+
+    Widget cardContent = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Overdue top indicator bar
+        if (isOverdueFlag)
+          Container(
+            height: 3,
+            decoration: BoxDecoration(
+              color: AppTheme.error,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(13),
+              ),
+            ),
+          ),
+
+        // ═══ TOP ZONE (Rows 1-3) ═══
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Left: Name, Property+CallCount, Source
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ROW 1: Lead Name
+                    Text(
+                      lead['clientName'] as String? ?? 'Unknown',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.darkText,
+                        height: 1.2,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                    const SizedBox(height: 8),
+
+                    // ROW 2: Property + Call count badge
+                    Row(
+                      children: [
+                        CustomIconWidget(
+                          iconName: 'apartment',
+                          color: AppTheme.primary.withAlpha(179),
+                          size: 14,
+                        ),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text(
+                            lead['property'] as String? ?? '—',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppTheme.darkText,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                        if (callsCount > 0) ...[
+                          const SizedBox(width: 8),
+                          _buildCallCountBadge(callsCount),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+
+                    // ROW 3: Lead Source
+                    Row(
+                      children: [
+                        CustomIconWidget(
+                          iconName: 'campaign_outlined',
+                          color: AppTheme.mutedText,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text(
+                            (lead['leadSource'] as String? ?? '').isNotEmpty
+                                ? (lead['leadSource'] as String? ?? '')
+                                : 'Unknown',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppTheme.mutedText,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(width: 10),
+
+              // Right: Status + Temp badges, then Call button
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // ROW 1-right: Status + Temperature side-by-side
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      StatusBadgeWidget(status: status, fontSize: 10),
+                      if (lead['leadTemperature'] != null &&
+                          (lead['leadTemperature'] as String? ?? '').isNotEmpty)
+                        _buildTemperatureBadge(lead['leadTemperature'] as String? ?? ''),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // ROW 2-right: Circular call button
+                  _buildCircularCallButton(),
+                ],
+              ),
+            ],
+          ),
+        ),
+
+        // ═══ DIVIDER ═══
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          child: Container(
+            height: 1,
+            color: Colors.black.withAlpha(15),
+          ),
+        ),
+
+        // ═══ BOTTOM ZONE (Rows 4-5) ═══
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ROW 4: Tag + Follow-up date
+              if (hasTag || followUpLabel.isNotEmpty)
+                Padding(
+                  padding: EdgeInsets.only(bottom: hasNote ? 8 : 0),
+                  child: Row(
+                    children: [
+                      if (hasTag) ...[
+                        _OutcomeTagChip(tag: lead['lastTag'] as String? ?? ''),
+                        const SizedBox(width: 8),
+                      ],
+                      if (followUpLabel.isNotEmpty)
+                        _buildFollowUpChip(followUpLabel, isOverdueFlag),
+                      const Spacer(),
+                      if (lead['callDuration'] != null &&
+                          (lead['callDuration'] as String? ?? '—') != '—' &&
+                          (lead['callDuration'] as String? ?? '').isNotEmpty)
+                        Text(
+                          lead['callDuration'] as String? ?? '—',
+                          style: GoogleFonts.inter(
+                            fontSize: 10,
+                            color: AppTheme.mutedText,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+
+              // ROW 5: Note preview (quote block style)
+              if (hasNote)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border(
+                      left: BorderSide(
+                        color: statusColor.withAlpha(150),
+                        width: 2.5,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      CustomIconWidget(
+                        iconName: 'notes',
+                        color: AppTheme.mutedText.withAlpha(130),
+                        size: 12,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          lead['lastNote'] as String? ?? '',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            fontStyle: FontStyle.italic,
+                            color: const Color(0xFF666666),
+                            height: 1.3,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    // Won green left border accent
+    if (leftBorderColor != null) {
+      cardContent = Container(
+        decoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(color: leftBorderColor, width: 4),
+          ),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: cardContent,
+        ),
+      );
+    }
+
+    // Lost leads muted opacity
+    if (_isLost) {
+      cardContent = Opacity(opacity: cardOpacity, child: cardContent);
+    }
 
     return FadeTransition(
       opacity: _fadeAnim,
@@ -212,310 +492,89 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
         child: Container(
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
             border: isOverdueFlag
                 ? Border.all(color: AppTheme.error.withAlpha(102), width: 1.5)
-                : Border.all(color: AppTheme.borderColor, width: 1),
+                : Border.all(color: AppTheme.borderColor.withAlpha(180), width: 1),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withAlpha(13),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
+                color: Colors.black.withAlpha(15),
+                blurRadius: 10,
+                spreadRadius: 1,
+                offset: const Offset(0, 4),
               ),
             ],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Overdue indicator bar
-              if (isOverdueFlag)
-                Container(
-                  height: 3,
-                  decoration: BoxDecoration(
-                    color: AppTheme.error,
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(11),
-                    ),
-                  ),
-                ),
-              Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Left side (avatar, name, phone, property)
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Name
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    lead['clientName'] as String? ?? 'Unknown',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppTheme.darkText,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-                              // Property row
-                              Row(
-                                children: [
-                                  CustomIconWidget(
-                                    iconName: 'apartment',
-                                    color: AppTheme.primary.withAlpha(179),
-                                    size: 14,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
-                                      lead['property'] as String? ?? '—',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                        color: AppTheme.darkText,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              // Lead Source row
-                              Row(
-                                children: [
-                                  CustomIconWidget(
-                                    iconName: 'campaign_outlined',
-                                    color: AppTheme.mutedText,
-                                    size: 14,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
-                                      (lead['leadSource'] as String? ?? '').isNotEmpty
-                                          ? (lead['leadSource'] as String? ?? '')
-                                          : 'Unknown',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                        color: AppTheme.mutedText,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        // Right side (status, temperature, call count)
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            StatusBadgeWidget(status: status),
-                            if (lead['leadTemperature'] != null && (lead['leadTemperature'] as String? ?? '').isNotEmpty) ...[
-                              const SizedBox(height: 4),
-                              _buildTemperatureBadge(lead['leadTemperature'] as String? ?? ''),
-                            ],
-                            if (lead['callsCount'] != null && (lead['callsCount'] as int? ?? 0) > 0) ...[
-                              const SizedBox(height: 4),
-                              _buildCallCountBadge(lead['callsCount'] as int? ?? 0),
-                            ],
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-
-                    // Row 3: Tag + Follow-up date
-                    Row(
-                      children: [
-                        if (hasTag) ...[
-                          _OutcomeTagChip(tag: lead['lastTag'] as String? ?? ''),
-                          const SizedBox(width: 8),
-                        ],
-                        if (followUpLabel.isNotEmpty) ...[
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: isOverdueFlag
-                                  ? AppTheme.errorContainer
-                                  : followUpLabel == 'Today'
-                                      ? AppTheme.accentContainer
-                                      : const Color(0xFFF3F4F6),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                CustomIconWidget(
-                                  iconName: 'calendar_today',
-                                  color: isOverdueFlag
-                                      ? AppTheme.error
-                                      : followUpLabel == 'Today'
-                                          ? AppTheme.warning
-                                          : AppTheme.mutedText,
-                                  size: 10,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  followUpLabel,
-                                  style: GoogleFonts.inter(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: isOverdueFlag
-                                        ? AppTheme.error
-                                        : followUpLabel == 'Today'
-                                            ? AppTheme.warning
-                                            : AppTheme.mutedText,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                        const Spacer(),
-                        if (lead['callDuration'] != null &&
-                            (lead['callDuration'] as String? ?? '—') != '—' &&
-                            (lead['callDuration'] as String? ?? '').isNotEmpty)
-                          Text(
-                            lead['callDuration'] as String? ?? '—',
-                            style: GoogleFonts.inter(
-                              fontSize: 10,
-                              color: AppTheme.mutedText,
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                    if (hasNote) ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppTheme.backgroundLight,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            CustomIconWidget(
-                              iconName: 'notes',
-                              color: AppTheme.mutedText,
-                              size: 13,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                                child: Text(
-                              lead['lastNote'] as String? ?? '',
-                              style: GoogleFonts.inter(
-                                fontSize: 12,
-                                color: AppTheme.mutedText,
-                                height: 1.4,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            )),
-                          ],
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-
-                    // Row 5: Action buttons
-                    Row(
-                      children: [
-                        // Call Now button
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: widget.onCallNow,
-                            child: Container(
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color: AppTheme.success,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  CustomIconWidget(
-                                    iconName: 'call',
-                                    color: Colors.white,
-                                    size: 15,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    'Call Now',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        // View button
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: widget.onView,
-                            child: Container(
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color: AppTheme.primaryContainer,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: AppTheme.primary.withAlpha(77),
-                                  width: 1,
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  CustomIconWidget(
-                                    iconName: 'arrow_forward',
-                                    color: AppTheme.primary,
-                                    size: 15,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    'View Lead',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppTheme.primary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              onTap: widget.onView,
+              borderRadius: BorderRadius.circular(14),
+              splashColor: AppTheme.primary.withAlpha(20),
+              highlightColor: AppTheme.primary.withAlpha(10),
+              child: cardContent,
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildFollowUpChip(String label, bool isOverdue) {
+    if (isOverdue) {
+      // Prominent overdue chip: red background, white text & icon
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: AppTheme.error,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 11),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Normal follow-up chip
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: label == 'Today'
+            ? AppTheme.accentContainer
+            : const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CustomIconWidget(
+            iconName: 'calendar_today',
+            color: label == 'Today' ? AppTheme.warning : AppTheme.mutedText,
+            size: 10,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: label == 'Today' ? AppTheme.warning : AppTheme.mutedText,
+            ),
+          ),
+        ],
       ),
     );
   }

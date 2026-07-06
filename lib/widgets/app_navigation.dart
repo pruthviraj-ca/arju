@@ -119,6 +119,12 @@ class AppDrawer extends StatelessWidget {
             onTap: () => _navigate(context, AppRoutes.myLeadsScreen),
           ),
           _DrawerItem(
+            iconName: 'apartment',
+            label: 'Inventory',
+            isActive: currentRoute == AppRoutes.inventoryScreen,
+            onTap: () => _navigate(context, AppRoutes.inventoryScreen),
+          ),
+          _DrawerItem(
             iconName: 'upload_file',
             label: 'Import Leads',
             isActive: currentRoute == AppRoutes.importLeadsScreen,

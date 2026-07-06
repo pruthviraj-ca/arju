@@ -37,11 +37,16 @@ TagColor getOutcomeTagColor(String tag) {
     // GREEN
     case 'Interested':
     case 'Booked':
-    case 'Not Answering':
     case 'Prospect':
     case 'Site Visit Completed':
       color = AppTheme.success;
       bg = AppTheme.successContainer;
+      break;
+
+    // GREY
+    case 'Not Answering':
+      color = AppTheme.mutedText;
+      bg = const Color(0xFFF3F4F6);
       break;
 
     // BLUE

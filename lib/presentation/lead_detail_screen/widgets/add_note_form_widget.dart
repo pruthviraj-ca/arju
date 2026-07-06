@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../theme/app_theme.dart';
 import '../../../models/note_model.dart';
 import '../../../services/firestore_service.dart';
+import '../../../utils/tag_colors.dart';
 
 /// Add Note form with outcome tag, follow-up date, call duration, and Save Note.
 class AddNoteFormWidget extends StatefulWidget {
@@ -250,22 +251,22 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
         debugPrint('Error fetching lead data: $e');
       }
 
+      String finalStatus = '';
       if (mappedStatus == null) {
         // "Source Inventory" — keep whatever status the lead currently has
-        leadUpdates['status'] = currentStatus.isNotEmpty ? currentStatus : 'called';
+        finalStatus = currentStatus.isNotEmpty ? currentStatus : 'called';
       } else if (isLostOrWon) {
         // Won/Lost always override any status (including Visited)
-        leadUpdates['status'] = mappedStatus;
+        finalStatus = mappedStatus;
       } else if (currentStatus == 'site visit done') {
         // "Visited" is persistent — non-Lost/non-Won tags don't downgrade it
-        leadUpdates['status'] = 'site visit done';
+        finalStatus = 'site visit done';
       } else {
         // Normal case: use the mapped status
-        leadUpdates['status'] = mappedStatus;
+        finalStatus = mappedStatus;
       }
 
       // Check if final status is won or lost/dead
-      final finalStatus = leadUpdates['status'] as String;
       final finalStatusLower = finalStatus.toLowerCase();
       final finalIsLostOrWon = finalStatusLower == 'won' ||
                                 finalStatusLower == 'lost' ||
@@ -278,8 +279,6 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       } else if (currentTemp.isEmpty) {
         targetTemp = 'Cold';
       }
-
-      leadUpdates['leadTemperature'] = targetTemp;
 
       // Follow-up date handling
       if (hasFollowUp) {
@@ -294,16 +293,27 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
         leadUpdates['callDuration'] = durationStr;
       }
 
+      // Update lead other updates
       await FirestoreService.instance.updateLead(widget.leadId, leadUpdates);
 
-      if (currentTemp != targetTemp) {
-        await FirestoreService.instance.logTemperatureChange(
-          leadId: widget.leadId,
-          clientName: clientName,
-          oldTemp: currentTemp,
-          newTemp: targetTemp,
-        );
-      }
+      // Centralized status update with logging
+      await FirestoreService.instance.updateLeadStatus(
+        leadId: widget.leadId,
+        newStatus: finalStatus,
+        triggeredBy: 'outcome_tag',
+        context: selectedTag,
+        clientName: clientName,
+        oldStatus: currentStatus,
+      );
+
+      // Centralized temperature update with logging
+      await FirestoreService.instance.updateLeadTemperature(
+        leadId: widget.leadId,
+        newTemp: targetTemp,
+        triggeredBy: 'outcome_tag',
+        clientName: clientName,
+        oldTemp: currentTemp,
+      );
 
       // 3. Clear form state after successful save
       setState(() {
@@ -359,15 +369,10 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
     Color textColor;
 
     if (isSelected) {
-      if (isFollowUp) {
-        bgColor = const Color(0xFFD4EDDA);
-        borderColor = const Color(0xFF28A745);
-        textColor = const Color(0xFF155724);
-      } else {
-        bgColor = const Color(0xFFFDE8E8);
-        borderColor = const Color(0xFFE05252);
-        textColor = const Color(0xFF991B1B);
-      }
+      final tagColor = getOutcomeTagColor(tag);
+      bgColor = tagColor.bgColor;
+      borderColor = tagColor.borderColor;
+      textColor = tagColor.textColor;
     } else {
       bgColor = Colors.transparent;
       borderColor = const Color(0xFFCCCCCC);
@@ -475,6 +480,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
                       TextField(
                         controller: _noteCtrl,
                         maxLines: 4,
+                        textCapitalization: TextCapitalization.sentences,
                         style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
                         decoration: InputDecoration(
                           hintText: 'What happened in this call?',

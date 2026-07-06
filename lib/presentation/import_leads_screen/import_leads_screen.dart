@@ -1828,6 +1828,8 @@ class _ManualLeadForm extends StatelessWidget {
               style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
               decoration: _inputDecoration('e.g. 9876543210', Icons.phone_outlined),
               keyboardType: TextInputType.phone,
+              textCapitalization: TextCapitalization.none,
+              autocorrect: false,
               validator: (v) {
                 if (v == null || v.trim().isEmpty) return 'Phone number is required';
                 if (v.trim().length < 10) return 'Enter a valid phone number';
@@ -1922,6 +1924,9 @@ class _ManualLeadForm extends StatelessWidget {
               style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
               decoration: _inputDecoration('e.g. rajesh@email.com', Icons.email_outlined),
               keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              textCapitalization: TextCapitalization.none,
+              autofillHints: const [AutofillHints.email],
             ),
             const SizedBox(height: 16),
 

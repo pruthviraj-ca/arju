@@ -311,6 +311,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 const SizedBox(height: 6),
                                 TextFormField(
                                   controller: _nameController,
+                                  textCapitalization: TextCapitalization.words,
                                   style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
                                   decoration: const InputDecoration(
                                     hintText: 'Rahul Sharma',
@@ -331,6 +332,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 const SizedBox(height: 6),
                                 TextFormField(
                                   controller: _roleController,
+                                  textCapitalization: TextCapitalization.words,
                                   style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
                                   decoration: const InputDecoration(
                                     hintText: 'Senior Relationship Manager',
@@ -352,6 +354,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 TextFormField(
                                   controller: _phoneController,
                                   keyboardType: TextInputType.phone,
+                                  textCapitalization: TextCapitalization.none,
+                                  autocorrect: false,
                                   style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
                                   decoration: const InputDecoration(
                                     hintText: '+91 98765 43210',
@@ -371,6 +375,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 const SizedBox(height: 6),
                                 TextFormField(
                                   controller: _regionController,
+                                  textCapitalization: TextCapitalization.words,
                                   style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
                                   decoration: const InputDecoration(
                                     hintText: 'Bengaluru East',
@@ -391,6 +396,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 TextFormField(
                                   controller: _bioController,
                                   maxLines: 3,
+                                  textCapitalization: TextCapitalization.sentences,
                                   style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
                                   decoration: const InputDecoration(
                                     hintText: 'Briefly describe your experience, specialization, etc...',
@@ -582,6 +588,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         TextFormField(
           controller: controller,
           obscureText: obscureText,
+          autocorrect: false,
+          textCapitalization: TextCapitalization.none,
           style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
           decoration: InputDecoration(
             hintText: hintText,

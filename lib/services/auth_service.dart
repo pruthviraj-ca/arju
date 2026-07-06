@@ -40,9 +40,8 @@ class AuthService {
 
   /// Emails authorized to sign in to this application.
   static const List<String> _allowedEmails = [
-    'pruthviraj.in.in@gmail.com',
     'arjunckbng@aol.com',
-    'pruthvi.in.in@gmail.com',
+    'pruthviraj.in.in@gmail.com',
   ];
 
   // ─── Auth State Accessors ─────────────────────────────────────────────────
@@ -76,6 +75,7 @@ class AuthService {
   Future<User?> signInWithEmail({
     required String email,
     required String password,
+    bool rememberMe = false,
   }) async {
     final trimmedEmail = email.trim().toLowerCase();
 
@@ -84,6 +84,10 @@ class AuthService {
         code: 'invalid-credential',
         message: 'Invalid email: This email address is not registered or authorized.',
       );
+    }
+
+    if (kIsWeb) {
+      await _auth.setPersistence(rememberMe ? Persistence.LOCAL : Persistence.SESSION);
     }
 
     final credential = await _auth.signInWithEmailAndPassword(

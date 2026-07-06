@@ -241,14 +241,24 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
 
       await FirestoreService.instance.updateSiteVisit(visitId, {'status': 'Completed'});
 
-      final Map<String, dynamic> leadUpdates = {
-        'status': 'site visit done',
+      await FirestoreService.instance.updateLead(leadId, {
         'siteVisitStatus': 'Completed',
-      };
-      if (currentTemp != targetTemp) {
-        leadUpdates['leadTemperature'] = targetTemp;
-      }
-      await FirestoreService.instance.updateLead(leadId, leadUpdates);
+      });
+
+      await FirestoreService.instance.updateLeadStatus(
+        leadId: leadId,
+        newStatus: 'site visit done',
+        triggeredBy: 'site_visit_completed',
+        clientName: clientName,
+      );
+
+      await FirestoreService.instance.updateLeadTemperature(
+        leadId: leadId,
+        newTemp: targetTemp,
+        triggeredBy: 'site_visit_completed',
+        clientName: clientName,
+        oldTemp: currentTemp,
+      );
 
       await _addAutoLogNote(
         leadId: leadId,
@@ -331,9 +341,14 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
     try {
       await FirestoreService.instance.updateSiteVisit(visitId, {'status': 'Missed'});
       await FirestoreService.instance.updateLead(leadId, {
-        'status': 'follow-up',
         'siteVisitStatus': 'Missed',
       });
+      await FirestoreService.instance.updateLeadStatus(
+        leadId: leadId,
+        newStatus: 'called',
+        triggeredBy: 'site_visit_missed',
+        clientName: clientName,
+      );
       await _addAutoLogNote(
         leadId: leadId,
         clientName: clientName,
@@ -395,9 +410,15 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
       });
 
       await FirestoreService.instance.updateLead(leadId, {
-        'status': 'site visit scheduled',
         'siteVisitStatus': 'Rescheduled',
       });
+
+      await FirestoreService.instance.updateLeadStatus(
+        leadId: leadId,
+        newStatus: 'site visit scheduled',
+        triggeredBy: 'site_visit_rescheduled',
+        clientName: clientName,
+      );
 
       await _addAutoLogNote(
         leadId: leadId,

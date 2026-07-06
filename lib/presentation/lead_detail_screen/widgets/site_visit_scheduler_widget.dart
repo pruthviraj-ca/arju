@@ -197,11 +197,15 @@ class __ScheduleBottomSheetContentState
 
     await FirestoreService.instance.addSiteVisit(visit);
 
-    await FirestoreService.instance.updateLead(widget.leadId, {
-      'status': 'site visit scheduled',
-      'lastTag': 'Site Visit Ready',
-      'statusChangedAt': DateTime.now().toIso8601String(),
-    });
+    await FirestoreService.instance.updateLeadStatus(
+      leadId: widget.leadId,
+      newStatus: 'site visit scheduled',
+      triggeredBy: 'site_visit_scheduled',
+      clientName: widget.clientName,
+      additionalUpdates: {
+        'lastTag': 'Site Visit Ready',
+      },
+    );
 
     final now = DateTime.now();
     final createdAt =

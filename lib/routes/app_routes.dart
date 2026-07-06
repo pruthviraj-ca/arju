@@ -8,6 +8,9 @@ import '../presentation/lead_detail_screen/lead_detail_screen.dart';
 import '../presentation/site_visits_screen/site_visits_screen.dart';
 import '../presentation/profile_screen/profile_screen.dart';
 import '../presentation/reports_screen/reports_screen.dart';
+import '../presentation/inventory_screen/inventory_screen.dart';
+import '../presentation/inventory_screen/add_project_screen.dart';
+import '../presentation/inventory_screen/project_detail_screen.dart';
 
 class AppRoutes {
   static const String initial = '/';
@@ -19,6 +22,9 @@ class AppRoutes {
   static const String leadDetailScreen = '/lead-detail-screen';
   static const String siteVisitsScreen = '/site-visits-screen';
   static const String profileScreen = '/profile-screen';
+  static const String inventoryScreen = '/inventory-screen';
+  static const String addProjectScreen = '/add-project-screen';
+  static const String projectDetailScreen = '/project-detail-screen';
 
   static Map<String, WidgetBuilder> routes = {
     loginScreen: (context) => const LoginScreen(),
@@ -29,5 +35,8 @@ class AppRoutes {
     leadDetailScreen: (context) => const LeadDetailScreen(),
     siteVisitsScreen: (context) => const SiteVisitsScreen(),
     profileScreen: (context) => const ProfileScreen(),
+    inventoryScreen: (context) => const InventoryScreen(),
+    addProjectScreen: (context) => const AddProjectScreen(),
+    projectDetailScreen: (context) => const ProjectDetailScreen(),
   };
 }

@@ -79,6 +79,7 @@ class _LoginScreenState extends State<LoginScreen>
       await AuthService.instance.signInWithEmail(
         email: _emailController.text.trim(),
         password: _passwordController.text,
+        rememberMe: _rememberMe,
       );
 
       if (!mounted) return;
@@ -181,6 +182,9 @@ class _LoginScreenState extends State<LoginScreen>
                 TextFormField(
                   controller: emailCtrl,
                   keyboardType: TextInputType.emailAddress,
+                  autocorrect: false,
+                  textCapitalization: TextCapitalization.none,
+                  autofillHints: const [AutofillHints.email],
                   style: GoogleFonts.inter(fontSize: 14, color: AppTheme.darkText),
                   decoration: const InputDecoration(
                     labelText: 'Email Address',
@@ -190,8 +194,9 @@ class _LoginScreenState extends State<LoginScreen>
                     if (value == null || value.trim().isEmpty) {
                       return 'Email is required';
                     }
-                    if (!RegExp(r'^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value.trim())) {
-                      return 'Enter a valid email address';
+                    final cleanVal = value.trim().toLowerCase();
+                    if (cleanVal != 'arjunckbng@aol.com' && cleanVal != 'pruthviraj.in.in@gmail.com') {
+                      return 'Invalid user ID';
                     }
                     return null;
                   },
@@ -217,15 +222,14 @@ class _LoginScreenState extends State<LoginScreen>
                 setState(() => _isLoading = true);
                 final email = emailCtrl.text.trim().toLowerCase();
                 final allowedEmails = [
-                  'pruthviraj.in.in@gmail.com',
                   'arjunckbng@aol.com',
-                  'pruthvi.in.in@gmail.com',
+                  'pruthviraj.in.in@gmail.com',
                 ];
                 if (!allowedEmails.contains(email)) {
                   scaffoldMessenger.showSnackBar(
                     SnackBar(
                       content: Text(
-                        'Invalid email: This email address is not registered.',
+                        'Invalid user ID',
                         style: GoogleFonts.inter(fontSize: 13),
                       ),
                       backgroundColor: AppTheme.error,
@@ -236,22 +240,6 @@ class _LoginScreenState extends State<LoginScreen>
                   return;
                 }
                 try {
-                  final methods = await FirebaseAuth.instance.fetchSignInMethodsForEmail(email);
-                  if (methods.isEmpty) {
-                    scaffoldMessenger.showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Invalid email: This email address is not registered.',
-                          style: GoogleFonts.inter(fontSize: 13),
-                        ),
-                        backgroundColor: AppTheme.error,
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                    );
-                    return;
-                  }
-
                   await FirebaseAuth.instance.sendPasswordResetEmail(
                     email: email,
                   );
@@ -398,6 +386,9 @@ class _LoginScreenState extends State<LoginScreen>
                                 controller: _emailController,
                                 keyboardType: TextInputType.emailAddress,
                                 textInputAction: TextInputAction.next,
+                                autocorrect: false,
+                                textCapitalization: TextCapitalization.none,
+                                autofillHints: const [AutofillHints.email],
                                 style: GoogleFonts.inter(
                                   fontSize: 14,
                                   color: AppTheme.darkText,
@@ -422,10 +413,9 @@ class _LoginScreenState extends State<LoginScreen>
                                   if (value == null || value.trim().isEmpty) {
                                     return 'Email is required';
                                   }
-                                  if (!RegExp(
-                                    r'^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$',
-                                  ).hasMatch(value.trim())) {
-                                    return 'Enter a valid email address';
+                                  final cleanVal = value.trim().toLowerCase();
+                                  if (cleanVal != 'arjunckbng@aol.com' && cleanVal != 'pruthviraj.in.in@gmail.com') {
+                                    return 'Invalid user ID';
                                   }
                                   return null;
                                 },
@@ -587,6 +577,15 @@ class _LoginScreenState extends State<LoginScreen>
                                   height: 50,
                                   child: OutlinedButton(
                                     onPressed: () async {
+                                      final email = _emailController.text.trim().toLowerCase();
+                                      final allowedEmails = [
+                                        'arjunckbng@aol.com',
+                                        'pruthviraj.in.in@gmail.com',
+                                      ];
+                                      if (!allowedEmails.contains(email)) {
+                                        _formKey.currentState!.validate();
+                                        return;
+                                      }
                                       await AuthService.instance.setDemoMode(true);
                                     },
                                     style: OutlinedButton.styleFrom(

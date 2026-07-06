@@ -45,45 +45,45 @@ class _TabbedBreakdownCardState extends State<TabbedBreakdownCard> {
 
   // Default Mock Fallbacks (used if the respective real data map is empty)
   static const Map<String, int> _mockLeadsStatus = {
-    'In Progress': 88,
-    'Closed': 12,
+    'In Progress': 0,
+    'Closed': 0,
   };
   static const Map<String, int> _mockLeadsProject = {
-    'Skyline Heights': 22,
-    'Urban Oasis': 34,
+    'Skyline Heights': 0,
+    'Urban Oasis': 0,
   };
   static const Map<String, int> _mockLeadsSource = {
-    'Referral': 15,
-    'Meta Ads': 40,
+    'Referral': 0,
+    'Meta Ads': 0,
   };
 
   static const Map<String, int> _mockSvsStatus = {
-    'Scheduled': 10,
-    'Completed': 45,
-    'Missed': 5,
+    'Scheduled': 0,
+    'Completed': 0,
+    'Missed': 0,
   };
   static const Map<String, int> _mockSvsProject = {
-    'Skyline Heights': 25,
-    'Green Valley': 15,
-    'Urban Oasis': 20,
+    'Skyline Heights': 0,
+    'Green Valley': 0,
+    'Urban Oasis': 0,
   };
   static const Map<String, int> _mockSvsSource = {
-    'Google Ads': 20,
-    'Facebook Ads': 30,
-    'Direct': 10,
+    'Google Ads': 0,
+    'Facebook Ads': 0,
+    'Direct': 0,
   };
 
   static const Map<String, int> _mockBookingsStatus = {
-    'Confirmed': 8,
-    'Pending': 2,
+    'Confirmed': 0,
+    'Pending': 0,
   };
   static const Map<String, int> _mockBookingsProject = {
-    'Skyline Heights': 5,
-    'Urban Oasis': 5,
+    'Skyline Heights': 0,
+    'Urban Oasis': 0,
   };
   static const Map<String, int> _mockBookingsSource = {
-    'Meta Ads': 6,
-    'Referral': 4,
+    'Meta Ads': 0,
+    'Referral': 0,
   };
 
   // ─── Color Helpers ──────────────────────────────────────────────────────────

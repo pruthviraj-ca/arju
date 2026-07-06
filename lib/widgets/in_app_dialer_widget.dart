@@ -524,6 +524,7 @@ class _InAppDialerOverlayState extends State<_InAppDialerOverlay>
                         color: Colors.white.withOpacity(0.9),
                       ),
                       maxLines: 2,
+                      textCapitalization: TextCapitalization.sentences,
                       decoration: InputDecoration(
                         hintText: 'Add note during call...',
                         hintStyle: GoogleFonts.inter(
