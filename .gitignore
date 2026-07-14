@@ -49,3 +49,6 @@ android/app/.cxx
 
 # Firebase CLI cache
 .firebase/
+
+# Firebase Auth exports
+users.json

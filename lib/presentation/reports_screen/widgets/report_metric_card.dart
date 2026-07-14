@@ -4,6 +4,7 @@
 /// Displays an icon, large metric value, and label in a white card
 /// with subtle shadow, matching the app's design system.
 
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../theme/app_theme.dart';
@@ -20,6 +21,8 @@ class ReportMetricCard extends StatelessWidget {
   final Color iconColor;
   final Color iconBgColor;
   final String? subtitle;
+  final VoidCallback? onTap;
+  final bool isTappableLink;
 
   const ReportMetricCard({
     super.key,
@@ -29,11 +32,13 @@ class ReportMetricCard extends StatelessWidget {
     required this.iconColor,
     required this.iconBgColor,
     this.subtitle,
+    this.onTap,
+    this.isTappableLink = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -74,7 +79,9 @@ class ReportMetricCard extends StatelessWidget {
             style: GoogleFonts.inter(
               fontSize: 17,
               fontWeight: FontWeight.w800,
-              color: AppTheme.darkText,
+              color: isTappableLink ? iconColor : AppTheme.darkText,
+              decoration: isTappableLink ? TextDecoration.underline : null,
+              decorationColor: isTappableLink ? iconColor.withAlpha(120) : null,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
@@ -106,5 +113,17 @@ class ReportMetricCard extends StatelessWidget {
         ],
       ),
     );
+
+    if (onTap != null) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: card,
+        ),
+      );
+    }
+    return card;
   }
 }

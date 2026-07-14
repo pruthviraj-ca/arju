@@ -156,6 +156,48 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
     );
   }
 
+  Widget _buildInlineCallInfo(int callsCount, String durationRaw, bool showDuration) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        CustomIconWidget(
+          iconName: 'call_made',
+          color: AppTheme.mutedText,
+          size: 10,
+        ),
+        const SizedBox(width: 3),
+        Text(
+          '$callsCount call${callsCount == 1 ? '' : 's'}',
+          style: GoogleFonts.inter(
+            fontSize: 10,
+            color: AppTheme.mutedText,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        if (showDuration) ...[
+          Text(
+            ' · ',
+            style: GoogleFonts.inter(
+              fontSize: 10,
+              color: AppTheme.mutedText,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          Text(
+            durationRaw,
+            style: GoogleFonts.inter(
+              fontSize: 10,
+              color: AppTheme.mutedText,
+              fontWeight: FontWeight.w500,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _buildTemperatureBadge(String temp) {
     String label;
     Color bg;
@@ -238,12 +280,22 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
     final followUpLabel = _followUpLabel;
     final isOverdueFlag = _isOverdue;
     final callsCount = lead['callsCount'] as int? ?? 0;
+    final durationRaw = lead['callDuration'] as String? ?? '';
+    final hasValidDuration = durationRaw.isNotEmpty && 
+                             durationRaw != '—' && 
+                             durationRaw != '0s' && 
+                             !durationRaw.startsWith('0m 00s') && 
+                             !durationRaw.startsWith('0m 0s');
+    final showCallInfo = callsCount > 0 || hasValidDuration;
+    final showDuration = callsCount > 0 && hasValidDuration;
     final statusColor = AppTheme.getStatusColor(status);
 
-    // Determine left border color for won/lost
+    // Determine left border color for won/lost/overdue (standardized to match Won style)
     Color? leftBorderColor;
     if (_isWon) {
       leftBorderColor = AppTheme.success;
+    } else if (_isLost || isOverdueFlag) {
+      leftBorderColor = AppTheme.error;
     }
 
     // Muted opacity for lost leads
@@ -253,18 +305,6 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Overdue top indicator bar
-        if (isOverdueFlag)
-          Container(
-            height: 3,
-            decoration: BoxDecoration(
-              color: AppTheme.error,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(13),
-              ),
-            ),
-          ),
-
         // ═══ TOP ZONE (Rows 1-3) ═══
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -290,7 +330,7 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
                     ),
                     const SizedBox(height: 8),
 
-                    // ROW 2: Property + Call count badge
+                    // ROW 2: Property
                     Row(
                       children: [
                         CustomIconWidget(
@@ -311,10 +351,6 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
                             maxLines: 1,
                           ),
                         ),
-                        if (callsCount > 0) ...[
-                          const SizedBox(width: 8),
-                          _buildCallCountBadge(callsCount),
-                        ],
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -391,8 +427,8 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ROW 4: Tag + Follow-up date
-              if (hasTag || followUpLabel.isNotEmpty)
+              // ROW 4: Tag + Follow-up date / Call count & duration
+              if (hasTag || followUpLabel.isNotEmpty || showCallInfo)
                 Padding(
                   padding: EdgeInsets.only(bottom: hasNote ? 8 : 0),
                   child: Row(
@@ -404,17 +440,8 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
                       if (followUpLabel.isNotEmpty)
                         _buildFollowUpChip(followUpLabel, isOverdueFlag),
                       const Spacer(),
-                      if (lead['callDuration'] != null &&
-                          (lead['callDuration'] as String? ?? '—') != '—' &&
-                          (lead['callDuration'] as String? ?? '').isNotEmpty)
-                        Text(
-                          lead['callDuration'] as String? ?? '—',
-                          style: GoogleFonts.inter(
-                            fontSize: 10,
-                            color: AppTheme.mutedText,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                        ),
+                      if (showCallInfo)
+                        _buildInlineCallInfo(callsCount, durationRaw, showDuration),
                     ],
                   ),
                 ),
@@ -451,7 +478,7 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
                             color: const Color(0xFF666666),
                             height: 1.3,
                           ),
-                          maxLines: 1,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -493,9 +520,7 @@ class _LeadCardWidgetState extends State<LeadCardWidget>
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
-            border: isOverdueFlag
-                ? Border.all(color: AppTheme.error.withAlpha(102), width: 1.5)
-                : Border.all(color: AppTheme.borderColor.withAlpha(180), width: 1),
+            border: Border.all(color: AppTheme.borderColor.withAlpha(180), width: 1),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withAlpha(15),

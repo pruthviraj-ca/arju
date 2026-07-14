@@ -1,7 +1,8 @@
-
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../../theme/app_theme.dart';
 import '../../../models/note_model.dart';
 import '../../../services/firestore_service.dart';
@@ -30,6 +31,10 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
   int _durationSeconds = 0;
   bool _isSaving = false;
   bool _showForm = false;
+
+  String? _validationError;
+  int? _followUpCount;
+  bool _isLoadingFollowUpCount = false;
 
   static const List<String> _followUpTags = [
     'Callback',
@@ -100,10 +105,19 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
   }
 
   Future<void> _pickFollowUpDateTime() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final defaultDateTime = _getDefaultFollowUpDateTime();
+
+    DateTime initialDate = _followUpDate ?? defaultDateTime;
+    if (initialDate.isBefore(today)) {
+      initialDate = defaultDateTime;
+    }
+
     final pickedDate = await showDatePicker(
       context: context,
-      initialDate: _followUpDate ?? DateTime.now().add(const Duration(days: 1)),
-      firstDate: DateTime.now(),
+      initialDate: initialDate,
+      firstDate: today,
       lastDate: DateTime.now().add(const Duration(days: 180)),
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx).copyWith(
@@ -114,11 +128,13 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
     );
     
     if (pickedDate != null && mounted) {
+      final TimeOfDay initialTime = _followUpDate != null 
+          ? TimeOfDay.fromDateTime(_followUpDate!) 
+          : TimeOfDay.fromDateTime(defaultDateTime);
+
       final TimeOfDay? pickedTime = await showTimePicker(
         context: context,
-        initialTime: _followUpDate != null 
-            ? TimeOfDay.fromDateTime(_followUpDate!) 
-            : const TimeOfDay(hour: 9, minute: 0),
+        initialTime: initialTime,
         builder: (ctx, child) => Theme(
           data: Theme.of(ctx).copyWith(
             colorScheme: const ColorScheme.light(primary: AppTheme.primary),
@@ -128,15 +144,30 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       );
 
       if (pickedTime != null) {
-        setState(() {
-          _followUpDate = DateTime(
-            pickedDate.year,
-            pickedDate.month,
-            pickedDate.day,
-            pickedTime.hour,
-            pickedTime.minute,
+        final newDateTime = DateTime(
+          pickedDate.year,
+          pickedDate.month,
+          pickedDate.day,
+          pickedTime.hour,
+          pickedTime.minute,
+        );
+
+        if (newDateTime.isBefore(DateTime.now())) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ Follow-up time cannot be in the past. Please select a future time.'),
+              backgroundColor: AppTheme.error,
+            ),
           );
+          return;
+        }
+
+        setState(() {
+          _followUpDate = newDateTime;
+          _validationError = null;
         });
+
+        _loadFollowUpCountForDate(newDateTime);
       }
     }
   }
@@ -167,6 +198,8 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
 
   Future<void> _saveNote() async {
+    setState(() => _validationError = null);
+
     if (_noteCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(
         context,
@@ -180,11 +213,19 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
       return;
     }
     final isFollowUpTag = _followUpTags.contains(_selectedTag);
-    if (isFollowUpTag && _followUpDate == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Please select a follow-up date.')));
-      return;
+    if (isFollowUpTag) {
+      if (_followUpDate == null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Please select a follow-up date.')));
+        return;
+      }
+      if (_followUpDate!.isBefore(DateTime.now())) {
+        setState(() {
+          _validationError = '⚠️ Follow-up time cannot be in the past. Please select a future time.';
+        });
+        return;
+      }
     }
     setState(() => _isSaving = true);
 
@@ -324,6 +365,8 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
         _durationMinutes = 0;
         _durationSeconds = 0;
         _showForm = false;
+        _validationError = null;
+        _followUpCount = null;
       });
 
       widget.onNoteSaved();
@@ -361,6 +404,110 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
     }
   }
 
+  DateTime _getDefaultFollowUpDateTime() {
+    final now = DateTime.now();
+    var target = now.add(const Duration(minutes: 15));
+    final rem = target.minute % 5;
+    if (rem != 0) {
+      target = target.add(Duration(minutes: 5 - rem));
+    }
+    return DateTime(target.year, target.month, target.day, target.hour, target.minute);
+  }
+
+  Future<String> _getApiBaseUrl() async {
+    if (kIsWeb && !Uri.base.toString().contains('localhost')) {
+      return Uri.base.origin;
+    }
+    try {
+      final uid = FirestoreService.instance.currentUid;
+      if (uid != null) {
+        final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+        if (doc.exists) {
+          final data = doc.data();
+          final twilio = data?['twilioConfig'] as Map<String, dynamic>?;
+          final fUrl = twilio?['functionUrl'] as String?;
+          if (fUrl != null && fUrl.trim().isNotEmpty) {
+            return fUrl.endsWith('/') ? fUrl.substring(0, fUrl.length - 1) : fUrl;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error getting functionUrl: $e');
+    }
+    return 'https://us-central1-truassets-crm-akp-web.cloudfunctions.net';
+  }
+
+  Future<void> _loadFollowUpCountForDate(DateTime date) async {
+    final agentId = FirestoreService.instance.currentUid;
+    if (agentId == null) return;
+
+    final dateStr = _formatDateIso(date);
+    
+    setState(() {
+      _isLoadingFollowUpCount = true;
+      _followUpCount = null;
+    });
+
+    try {
+      final baseUrl = await _getApiBaseUrl();
+      String url;
+      if (baseUrl.contains('.cloudfunctions.net')) {
+        url = '$baseUrl/followupCount';
+      } else {
+        url = '$baseUrl/api/leads/followup-count';
+      }
+
+      final dio = Dio();
+      final response = await dio.get(
+        url,
+        queryParameters: {
+          'date': dateStr,
+          'agent_id': agentId,
+          'exclude_lead_id': widget.leadId,
+        },
+      );
+
+      if (response.statusCode == 200 && response.data != null) {
+        final count = response.data['count'] as int?;
+        if (mounted) {
+          setState(() {
+            _followUpCount = count;
+            _isLoadingFollowUpCount = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _isLoadingFollowUpCount = false;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading follow-up count: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingFollowUpCount = false;
+        });
+      }
+    }
+  }
+
+  void _onTagSelected(String tag, bool isFollowUp) {
+    setState(() {
+      _selectedTag = tag;
+      _validationError = null;
+      if (!isFollowUp) {
+        _followUpDate = null;
+        _followUpCount = null;
+      } else {
+        if (_followUpDate == null) {
+          _followUpDate = _getDefaultFollowUpDateTime();
+          _loadFollowUpCountForDate(_followUpDate!);
+        }
+      }
+    });
+  }
+
   Widget _buildTagChip(String tag, {required bool isFollowUp}) {
     final isSelected = _selectedTag == tag;
     
@@ -380,14 +527,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
     }
 
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selectedTag = tag;
-          if (!isFollowUp) {
-            _followUpDate = null;
-          }
-        });
-      },
+      onTap: () => _onTagSelected(tag, isFollowUp),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
         decoration: BoxDecoration(
@@ -404,6 +544,45 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildFollowUpCountMessage(int count) {
+    Color color;
+    String text;
+
+    if (count == 0) {
+      color = const Color(0xFF059669); // Neutral/green
+      text = 'No follow-ups scheduled on this date';
+    } else if (count >= 1 && count <= 3) {
+      color = const Color(0xFFD97706); // Amber/orange
+      text = '📅 $count follow-up(s) already scheduled on this date';
+    } else {
+      color = const Color(0xFFDC2626); // Red
+      text = '📅 $count follow-up(s) already scheduled on this date';
+    }
+
+    return Row(
+      children: [
+        if (count == 0) ...[
+          Icon(
+            Icons.check_circle_outline,
+            color: color,
+            size: 13,
+          ),
+          const SizedBox(width: 6),
+        ],
+        Expanded(
+          child: Text(
+            text,
+            style: GoogleFonts.inter(
+              fontSize: 11,
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -540,6 +719,7 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
                         runSpacing: 6,
                         children: _noFollowUpTags.map((t) => _buildTagChip(t, isFollowUp: false)).toList(),
                       ),
+
                       // Follow-up date (conditional)
                       if (_showFollowUp) ...[
                         const SizedBox(height: 12),
@@ -590,6 +770,55 @@ class AddNoteFormWidgetState extends State<AddNoteFormWidget> {
                             ),
                           ),
                         ),
+                        if (_validationError != null) ...[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.warning_amber_rounded,
+                                color: AppTheme.error,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  _validationError!,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11,
+                                    color: AppTheme.error,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (_followUpDate != null) ...[
+                          const SizedBox(height: 6),
+                          if (_isLoadingFollowUpCount)
+                            Row(
+                              children: [
+                                const SizedBox(
+                                  width: 10,
+                                  height: 10,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                    color: AppTheme.primary,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Checking scheduled follow-ups...',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11,
+                                    color: AppTheme.mutedText,
+                                  ),
+                                ),
+                              ],
+                            )
+                          else if (_followUpCount != null)
+                            _buildFollowUpCountMessage(_followUpCount!),
+                        ],
                       ],
                       const SizedBox(height: 12),
                       // Call duration

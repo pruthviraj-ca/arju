@@ -4,9 +4,9 @@ import 'package:flutter/material.dart';
 /// during a single app session. Resets on user logout or app cold start.
 class MyLeadsFilterSession {
   static String searchQuery = '';
-  static String selectedFilter = 'All';
-  static String selectedTagFilter = 'All';
-  static String selectedTempFilter = 'All';
+  static List<String> selectedFilter = [];
+  static List<String> selectedTagFilter = [];
+  static List<String> selectedTempFilter = [];
   static String sortBy = 'Created Date';
   static DateTimeRange? selectedDateRange;
   static bool isFilterExpanded = false;
@@ -14,9 +14,9 @@ class MyLeadsFilterSession {
   /// Resets all filter values back to their defaults.
   static void reset() {
     searchQuery = '';
-    selectedFilter = 'All';
-    selectedTagFilter = 'All';
-    selectedTempFilter = 'All';
+    selectedFilter = [];
+    selectedTagFilter = [];
+    selectedTempFilter = [];
     sortBy = 'Created Date';
     selectedDateRange = null;
     isFilterExpanded = false;

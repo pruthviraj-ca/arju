@@ -14,6 +14,7 @@ import '../models/site_visit_model.dart';
 import '../models/project_model.dart';
 import '../models/tower_model.dart';
 import '../models/unit_model.dart';
+import '../models/registration_stage_model.dart';
 import 'auth_service.dart';
 
 /// Singleton service for all Firestore database operations.
@@ -39,6 +40,8 @@ class FirestoreService {
 
   String? _lastCachedUid;
 
+  bool _cleanedOrphans = false;
+
   void _checkUidAndResetCache() {
     final currentUid = _uid;
     if (_lastCachedUid != currentUid) {
@@ -54,6 +57,75 @@ class FirestoreService {
       _siteVisitsSubscription = null;
       _siteVisitsStreamController?.close();
       _siteVisitsStreamController = null;
+
+      if (currentUid != null) {
+        _cleanedOrphans = false;
+        cleanOrphanedRecords();
+      }
+    }
+  }
+
+  /// Runs a one-time background cleanup of orphaned records (site visits, call logs, unit bookings)
+  /// that reference leads which no longer exist.
+  Future<void> cleanOrphanedRecords() async {
+    if (_uid == null || _cleanedOrphans) return;
+    _cleanedOrphans = true;
+    try {
+      // 1. Get all active lead IDs
+      final leadsSnapshot = await _leadsRef().get();
+      final activeLeadIds = leadsSnapshot.docs.map((doc) => doc.id).toSet();
+
+      // 2. Fetch all site visits
+      final svSnapshot = await _siteVisitsRef().get();
+      final batch = _db.batch();
+      int batchCount = 0;
+
+      for (final doc in svSnapshot.docs) {
+        final data = doc.data();
+        final leadId = data['leadId'] as String? ?? '';
+        if (leadId.isNotEmpty && !activeLeadIds.contains(leadId)) {
+          batch.delete(doc.reference);
+          batchCount++;
+        }
+      }
+
+      // 3. Fetch all call logs
+      final callLogsSnapshot = await _db.collection('users').doc(_uid).collection('calllog').get();
+      for (final doc in callLogsSnapshot.docs) {
+        final data = doc.data();
+        final leadId = data['leadId'] as String? ?? '';
+        if (leadId.isNotEmpty && !activeLeadIds.contains(leadId)) {
+          batch.delete(doc.reference);
+          batchCount++;
+        }
+      }
+
+      // 4. Fetch all project units and unlink them if booking lead is deleted
+      final projectsSnapshot = await _projectsRef().get();
+      for (final projDoc in projectsSnapshot.docs) {
+        final unitsSnapshot = await _unitsRef(projDoc.id).get();
+        for (final unitDoc in unitsSnapshot.docs) {
+          final data = unitDoc.data();
+          final bookingLeadId = data['booking_lead_id'] ?? data['bookingLeadId'];
+          if (bookingLeadId != null && bookingLeadId.isNotEmpty && !activeLeadIds.contains(bookingLeadId)) {
+            batch.update(unitDoc.reference, {
+              'booking_lead_id': null,
+              'bookingLeadId': null,
+              'availability_status': 'Available',
+              'availabilityStatus': 'Available',
+              'updatedAt': DateTime.now().toIso8601String(),
+            });
+            batchCount++;
+          }
+        }
+      }
+
+      if (batchCount > 0) {
+        await batch.commit();
+        print('Cleaned up $batchCount orphaned records.');
+      }
+    } catch (e) {
+      print('Error cleaning up orphaned records: $e');
     }
   }
 
@@ -190,9 +262,52 @@ class FirestoreService {
     await _leadsRef().doc(leadId).update(updates);
   }
 
-  /// Permanently deletes a lead document by [leadId].
+  /// Permanently deletes a lead document by [leadId] and cascades all related records.
   Future<void> deleteLead(String leadId) async {
-    await _leadsRef().doc(leadId).delete();
+    if (_uid == null) return;
+    final batch = _db.batch();
+
+    // 1. Delete parent lead doc
+    batch.delete(_leadsRef().doc(leadId));
+
+    // 2. Delete all notes inside notes subcollection
+    final notesSnapshot = await _leadsRef().doc(leadId).collection('notes').get();
+    for (final doc in notesSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+
+    // 3. Delete all site visits where leadId == leadId
+    final svSnapshot = await _siteVisitsRef().where('leadId', isEqualTo: leadId).get();
+    for (final doc in svSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+
+    // 4. Delete all call logs where leadId == leadId
+    final callLogsSnapshot = await _db.collection('users').doc(_uid).collection('calllog').where('leadId', isEqualTo: leadId).get();
+    for (final doc in callLogsSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+
+    // 5. Unlink inventory unit bookings
+    final projectsSnapshot = await _projectsRef().get();
+    for (final projDoc in projectsSnapshot.docs) {
+      final unitsSnapshot = await _unitsRef(projDoc.id).get();
+      for (final unitDoc in unitsSnapshot.docs) {
+        final data = unitDoc.data();
+        final bookingLeadId = data['booking_lead_id'] ?? data['bookingLeadId'];
+        if (bookingLeadId == leadId) {
+          batch.update(unitDoc.reference, {
+            'booking_lead_id': null,
+            'bookingLeadId': null,
+            'availability_status': 'Available',
+            'availabilityStatus': 'Available',
+            'updatedAt': DateTime.now().toIso8601String(),
+          });
+        }
+      }
+    }
+
+    await batch.commit();
   }
 
   /// Fetches the full list of leads once, ordered by creation date (newest first).
@@ -202,13 +317,53 @@ class FirestoreService {
     return snapshot.docs.map((doc) => LeadModel.fromFirestore(doc)).toList();
   }
 
-  /// Deletes multiple leads in a single batch transaction.
+  /// Deletes multiple leads and cascades all related records in a single batch transaction.
   Future<void> deleteLeadsBatch(List<String> leadIds) async {
     if (_uid == null || leadIds.isEmpty) return;
     final batch = _db.batch();
-    for (final id in leadIds) {
-      batch.delete(_leadsRef().doc(id));
+
+    for (final leadId in leadIds) {
+      // 1. Delete parent lead doc
+      batch.delete(_leadsRef().doc(leadId));
+
+      // 2. Delete all notes inside notes subcollection
+      final notesSnapshot = await _leadsRef().doc(leadId).collection('notes').get();
+      for (final doc in notesSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+
+      // 3. Delete all site visits where leadId == leadId
+      final svSnapshot = await _siteVisitsRef().where('leadId', isEqualTo: leadId).get();
+      for (final doc in svSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+
+      // 4. Delete all call logs where leadId == leadId
+      final callLogsSnapshot = await _db.collection('users').doc(_uid).collection('calllog').where('leadId', isEqualTo: leadId).get();
+      for (final doc in callLogsSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+
+      // 5. Unlink inventory unit bookings
+      final projectsSnapshot = await _projectsRef().get();
+      for (final projDoc in projectsSnapshot.docs) {
+        final unitsSnapshot = await _unitsRef(projDoc.id).get();
+        for (final unitDoc in unitsSnapshot.docs) {
+          final data = unitDoc.data();
+          final bookingLeadId = data['booking_lead_id'] ?? data['bookingLeadId'];
+          if (bookingLeadId == leadId) {
+            batch.update(unitDoc.reference, {
+              'booking_lead_id': null,
+              'bookingLeadId': null,
+              'availability_status': 'Available',
+              'availabilityStatus': 'Available',
+              'updatedAt': DateTime.now().toIso8601String(),
+            });
+          }
+        }
+      }
     }
+
     await batch.commit();
   }
 
@@ -317,6 +472,7 @@ class FirestoreService {
     String? clientName,
     String? oldStatus,
     Map<String, dynamic>? additionalUpdates,
+    bool logStatusChange = true,
   }) async {
     if (_uid == null) return;
     
@@ -371,25 +527,27 @@ class FirestoreService {
       );
     }
 
-    // Create timeline status change log entry
-    final tag = _statusLogTag(newStatusLower);
-    final text = _statusLogText(newStatusLower, name, triggeredBy, context);
+    if (logStatusChange) {
+      // Create timeline status change log entry
+      final tag = _statusLogTag(newStatusLower);
+      final text = _statusLogText(newStatusLower, name, triggeredBy, context);
 
-    final now = DateTime.now();
-    final createdAt =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      final now = DateTime.now();
+      final createdAt =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
 
-    final autoNote = NoteModel(
-      id: '',
-      text: text,
-      tag: tag,
-      callDuration: '',
-      createdAt: createdAt,
-      isAutoLog: true,
-    );
+      final autoNote = NoteModel(
+        id: '',
+        text: text,
+        tag: tag,
+        callDuration: '',
+        createdAt: createdAt,
+        isAutoLog: true,
+      );
 
-    await addNote(leadId, autoNote);
+      await addNote(leadId, autoNote);
+    }
   }
 
   /// Updates a lead's temperature tag in the database and creates a corresponding timeline log entry.
@@ -743,10 +901,21 @@ class FirestoreService {
   Stream<List<UnitModel>> streamUnits(String projectId) {
     if (_uid == null) return Stream.value([]);
     return _unitsRef(projectId)
-        .orderBy('unitNumber')
         .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => UnitModel.fromFirestore(doc)).toList());
+        .map((snapshot) {
+      final list = snapshot.docs.map((doc) => UnitModel.fromFirestore(doc)).toList();
+      list.sort((a, b) => a.unitNumber.compareTo(b.unitNumber));
+      return list;
+    });
+  }
+
+  /// Fetches all units for a given project once.
+  Future<List<UnitModel>> getUnitsOnce(String projectId) async {
+    if (_uid == null) return [];
+    final snapshot = await _unitsRef(projectId).get();
+    final list = snapshot.docs.map((doc) => UnitModel.fromFirestore(doc)).toList();
+    list.sort((a, b) => a.unitNumber.compareTo(b.unitNumber));
+    return list;
   }
 
   /// Batch-creates multiple units. Firestore limits batches to 500,
@@ -772,5 +941,181 @@ class FirestoreService {
   /// Updates a single unit document (status, price, notes, booking link).
   Future<void> updateUnit(String projectId, String unitId, Map<String, dynamic> updates) async {
     await _unitsRef(projectId).doc(unitId).update(updates);
+  }
+
+  /// Adds a single unit to a project.
+  Future<String> addUnit(String projectId, UnitModel unit) async {
+    final ref = unit.id.isEmpty
+        ? _unitsRef(projectId).doc()
+        : _unitsRef(projectId).doc(unit.id);
+    await ref.set(unit.toMap());
+    return ref.id;
+  }
+
+  /// Deletes a single unit from a project.
+  Future<void> deleteUnit(String projectId, String unitId) async {
+    await _unitsRef(projectId).doc(unitId).delete();
+  }
+
+  /// Deletes a project and all its child towers and units (cascade delete).
+  Future<void> deleteProjectWithChildren(String projectId) async {
+    // Delete all units
+    final unitsSnapshot = await _unitsRef(projectId).get();
+    final batch1 = _db.batch();
+    for (final doc in unitsSnapshot.docs) {
+      batch1.delete(doc.reference);
+    }
+    await batch1.commit();
+
+    // Delete all towers
+    final towersSnapshot = await _towersRef(projectId).get();
+    final batch2 = _db.batch();
+    for (final doc in towersSnapshot.docs) {
+      batch2.delete(doc.reference);
+    }
+    await batch2.commit();
+
+    // Delete the project document itself
+    await _projectsRef().doc(projectId).delete();
+  }
+
+  // ─── Registration Stages (Sub-collection under Unit) ───────────────────────
+
+  /// Returns the registration_stages sub-collection reference for a unit.
+  CollectionReference<Map<String, dynamic>> _registrationStagesRef(
+      String projectId, String unitId) {
+    return _unitsRef(projectId)
+        .doc(unitId)
+        .collection('registration_stages');
+  }
+
+  /// Streams all registration stages for a given unit, ordered by stage number.
+  Stream<List<RegistrationStageModel>> streamRegistrationStages(
+      String projectId, String unitId) {
+    if (_uid == null) return Stream.value([]);
+    return _registrationStagesRef(projectId, unitId)
+        .orderBy('stage_number')
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => RegistrationStageModel.fromFirestore(doc))
+            .toList());
+  }
+
+  /// Checks whether registration stages already exist for a unit.
+  Future<bool> hasRegistrationStages(
+      String projectId, String unitId) async {
+    if (_uid == null) return false;
+    final snapshot =
+        await _registrationStagesRef(projectId, unitId).limit(1).get();
+    return snapshot.docs.isNotEmpty;
+  }
+
+  /// Batch-creates the 10 initial registration stages for a unit
+  /// (called when a unit is first set to "Booked").
+  Future<void> initializeRegistrationStages(
+      String projectId, String unitId) async {
+    // Don't re-initialize if stages already exist
+    final exists = await hasRegistrationStages(projectId, unitId);
+    if (exists) return;
+
+    final stages = RegistrationStageModel.createInitialStages(unitId);
+    final batch = _db.batch();
+    for (final stage in stages) {
+      final ref = _registrationStagesRef(projectId, unitId).doc();
+      batch.set(ref, stage.toMap());
+    }
+    await batch.commit();
+  }
+
+  /// Updates a single registration stage document.
+  Future<void> updateRegistrationStage(String projectId, String unitId,
+      String stageId, Map<String, dynamic> updates) async {
+    await _registrationStagesRef(projectId, unitId)
+        .doc(stageId)
+        .update(updates);
+  }
+
+  /// Fetches registration stages once (non-streaming) for a unit.
+  Future<List<RegistrationStageModel>> getRegistrationStagesOnce(
+      String projectId, String unitId) async {
+    if (_uid == null) return [];
+    final snapshot = await _registrationStagesRef(projectId, unitId)
+        .orderBy('stage_number')
+        .get();
+    return snapshot.docs
+        .map((doc) => RegistrationStageModel.fromFirestore(doc))
+        .toList();
+  }
+
+  // ─── Data Migration ────────────────────────────────────────────────────────
+
+  /// One-time migration: converts old Resale/Rental availability statuses
+  /// into the new unit_type + availability_status schema.
+  ///
+  /// - `availability_status: 'Resale'` → `unit_type: 'Resale', availability_status: 'Available'`
+  /// - `availability_status: 'Rental'` → `unit_type: 'Rental', availability_status: 'Available'`
+  /// - `availability_status: 'Blocked'` → `availability_status: 'Hold'`
+  /// - Units without `unit_type` → `unit_type: 'Fresh'`
+  Future<void> migrateUnitTypesForProject(String projectId) async {
+    if (_uid == null) return;
+    final snapshot = await _unitsRef(projectId).get();
+    if (snapshot.docs.isEmpty) return;
+
+    final batch = _db.batch();
+    int batchCount = 0;
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final currentStatus =
+          (data['availability_status'] ?? data['availabilityStatus'] ?? 'Available') as String;
+      final hasUnitType = data.containsKey('unit_type');
+
+      Map<String, dynamic>? updates;
+
+      if (currentStatus == 'Resale' && !hasUnitType) {
+        updates = {
+          'unit_type': 'Resale',
+          'unitType': 'Resale',
+          'availability_status': 'Available',
+          'availabilityStatus': 'Available',
+        };
+      } else if (currentStatus == 'Rental' && !hasUnitType) {
+        updates = {
+          'unit_type': 'Rental',
+          'unitType': 'Rental',
+          'availability_status': 'Available',
+          'availabilityStatus': 'Available',
+        };
+      } else if (currentStatus == 'Blocked') {
+        updates = {
+          'availability_status': 'Hold',
+          'availabilityStatus': 'Hold',
+        };
+        if (!hasUnitType) {
+          updates['unit_type'] = 'Fresh';
+          updates['unitType'] = 'Fresh';
+        }
+      } else if (!hasUnitType) {
+        updates = {
+          'unit_type': 'Fresh',
+          'unitType': 'Fresh',
+        };
+      }
+
+      if (updates != null) {
+        batch.update(doc.reference, updates);
+        batchCount++;
+
+        // Firestore batch limit
+        if (batchCount >= 499) {
+          await batch.commit();
+          batchCount = 0;
+        }
+      }
+    }
+
+    if (batchCount > 0) {
+      await batch.commit();
+    }
   }
 }

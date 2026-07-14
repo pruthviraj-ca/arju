@@ -205,6 +205,7 @@ class __ScheduleBottomSheetContentState
       additionalUpdates: {
         'lastTag': 'Site Visit Ready',
       },
+      logStatusChange: false,
     );
 
     final now = DateTime.now();

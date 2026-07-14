@@ -21,12 +21,14 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
   bool _isSaving = false;
   bool _isEditMode = false;
   String? _editProjectId;
+  List<UnitModel> _allUnits = [];
 
   // Section 1 — Project Overview
   final _nameCtrl = TextEditingController();
   final _developerCtrl = TextEditingController();
   String _projectType = 'Apartment';
   final _reraCtrl = TextEditingController();
+  final _descriptionCtrl = TextEditingController();
   DateTime? _possessionDate;
 
   // Section 2 — Location
@@ -78,8 +80,10 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
         _landUnit = project.landParcelUnit;
         _towerCount = project.totalTowers > 0 ? project.totalTowers : 1;
         _selectedAmenities.addAll(project.amenities);
+        _descriptionCtrl.text = project.description;
         // Tower names would need to be loaded from sub-collection
         _updateTowerFields();
+        _loadUnitsForDeletion(project.id);
       }
     }
   }
@@ -101,6 +105,7 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
     _nameCtrl.dispose();
     _developerCtrl.dispose();
     _reraCtrl.dispose();
+    _descriptionCtrl.dispose();
     _addressCtrl.dispose();
     _cityCtrl.dispose();
     _pincodeCtrl.dispose();
@@ -144,6 +149,7 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
         reraNumber: _reraCtrl.text.trim(),
         possessionDate: _possessionDate?.toIso8601String() ?? '',
         amenities: _selectedAmenities,
+        description: _descriptionCtrl.text.trim(),
         createdAt: _isEditMode ? '' : now,
         updatedAt: now,
       );
@@ -171,10 +177,8 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
         for (final ut in _unitTypes) {
           final count = int.tryParse(ut.countCtrl.text.trim()) ?? 0;
           final sba = double.tryParse(ut.sbaCtrl.text.trim()) ?? 0.0;
-          final ba = double.tryParse(ut.baCtrl.text.trim()) ?? 0.0;
-          final ca = double.tryParse(ut.caCtrl.text.trim()) ?? 0.0;
-          final pricePerSqft = double.tryParse(ut.priceCtrl.text.trim()) ?? 0.0;
-          final computedTotal = pricePerSqft * sba;
+          final totalPrice = double.tryParse(ut.priceCtrl.text.trim()) ?? 0.0;
+          final pricePerSqft = sba > 0 ? totalPrice / sba : 0.0;
 
           for (int i = 0; i < count; i++) {
             final towerIdx = _towerCount > 0 ? (unitCounter - 1) % _towerCount : 0;
@@ -193,10 +197,12 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
               bhkType: ut.bhkType,
               facing: ut.facing,
               superBuiltupArea: sba,
-              builtupArea: ba,
-              carpetArea: ca,
+              bedrooms: ut.bedrooms,
+              bathrooms: ut.bathrooms,
               basePricePerSqft: pricePerSqft,
-              totalPrice: computedTotal,
+              totalPrice: totalPrice,
+              furnishing: ut.furnishing,
+              carParking: ut.carParking,
               availabilityStatus: 'Available',
               createdAt: now,
               updatedAt: now,
@@ -293,6 +299,11 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
                 _buildTextField('RERA Number', _reraCtrl, textCapitalization: TextCapitalization.none, autocorrect: false),
                 const SizedBox(height: 12),
                 _buildDatePicker('Possession Date'),
+                const SizedBox(height: 12),
+                _buildTextField('Project Description', _descriptionCtrl,
+                    maxLines: 4,
+                    textCapitalization: TextCapitalization.sentences,
+                    hintText: 'Brief introduction about the project — highlights, USPs, key features...'),
                 const SizedBox(height: 24),
 
                 _buildSectionHeader('Location', 'location_on'),
@@ -423,6 +434,22 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
                           ),
                   ),
                 ),
+                if (_isEditMode) ...[
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _isSaving ? null : _confirmDeleteProject,
+                      icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.error),
+                      label: Text('Delete Project', style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.error)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: AppTheme.error),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 32),
               ],
             ),
@@ -459,6 +486,7 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
     TextInputType? keyboardType,
     TextCapitalization textCapitalization = TextCapitalization.none,
     bool autocorrect = true,
+    String? hintText,
   }) {
     return TextFormField(
       controller: ctrl,
@@ -470,6 +498,8 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
       decoration: InputDecoration(
         labelText: label,
         labelStyle: GoogleFonts.inter(fontSize: 13, color: AppTheme.mutedText),
+        hintText: hintText,
+        hintStyle: GoogleFonts.inter(fontSize: 12, color: AppTheme.mutedText.withAlpha(120)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         enabledBorder: OutlineInputBorder(
@@ -638,6 +668,7 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
             ],
           ),
           const SizedBox(height: 10),
+          // Row 1: BHK + Main Door Facing
           Row(
             children: [
               Expanded(
@@ -646,26 +677,49 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: _buildDropdown('Facing', ut.facing, UnitModel.facings,
+                child: _buildDropdown('Main Door Facing', ut.facing, UnitModel.facings,
                     (v) => setState(() => ut.facing = v!)),
               ),
             ],
           ),
           const SizedBox(height: 10),
+          // Row 2: SBA + Bedrooms + Bathrooms
           Row(
             children: [
-              Expanded(child: _buildTextField('SBA (sq ft)', ut.sbaCtrl, keyboardType: TextInputType.number, textCapitalization: TextCapitalization.none, autocorrect: false)),
+              Expanded(child: _buildTextField('SBA in SqFt', ut.sbaCtrl, keyboardType: TextInputType.number, textCapitalization: TextCapitalization.none, autocorrect: false)),
               const SizedBox(width: 8),
-              Expanded(child: _buildTextField('Built-up', ut.baCtrl, keyboardType: TextInputType.number, textCapitalization: TextCapitalization.none, autocorrect: false)),
+              SizedBox(
+                width: 80,
+                child: _buildIntStepper('Beds', ut.bedrooms, (v) => setState(() => ut.bedrooms = v)),
+              ),
               const SizedBox(width: 8),
-              Expanded(child: _buildTextField('Carpet', ut.caCtrl, keyboardType: TextInputType.number, textCapitalization: TextCapitalization.none, autocorrect: false)),
+              SizedBox(
+                width: 80,
+                child: _buildIntStepper('Baths', ut.bathrooms, (v) => setState(() => ut.bathrooms = v)),
+              ),
             ],
           ),
           const SizedBox(height: 10),
+          // Row 3: Furnishing + Car Parking
           Row(
             children: [
               Expanded(
-                child: _buildTextField('Price/sq ft (₹)', ut.priceCtrl,
+                child: _buildDropdown('Furnishing', ut.furnishing, UnitModel.furnishingOptions,
+                    (v) => setState(() => ut.furnishing = v!)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildDropdown('Car Parking', ut.carParking, UnitModel.carParkingOptions,
+                    (v) => setState(() => ut.carParking = v!)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Row 4: Price + Count
+          Row(
+            children: [
+              Expanded(
+                child: _buildTextField('Total Price (₹)', ut.priceCtrl,
                     keyboardType: TextInputType.number, textCapitalization: TextCapitalization.none, autocorrect: false),
               ),
               const SizedBox(width: 12),
@@ -679,22 +733,154 @@ class _AddProjectScreenState extends State<AddProjectScreen> {
       ),
     );
   }
+
+  Widget _buildIntStepper(String label, int value, ValueChanged<int> onChanged) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: GoogleFonts.inter(fontSize: 11, color: AppTheme.mutedText)),
+        const SizedBox(height: 4),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: AppTheme.borderColor),
+            borderRadius: BorderRadius.circular(8),
+            color: Colors.white,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              InkWell(
+                onTap: value > 1 ? () => onChanged(value - 1) : null,
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(Icons.remove, size: 14, color: value > 1 ? AppTheme.primary : AppTheme.mutedText),
+                ),
+              ),
+              Text('$value', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700)),
+              InkWell(
+                onTap: () => onChanged(value + 1),
+                child: const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(Icons.add, size: 14, color: AppTheme.primary),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _loadUnitsForDeletion(String projectId) {
+    FirestoreService.instance.getUnitsOnce(projectId).then((units) {
+      if (mounted) {
+        setState(() => _allUnits = units);
+      }
+    });
+  }
+
+  void _confirmDeleteProject() {
+    if (_editProjectId == null) return;
+    final bookedCount = _allUnits.where((u) => u.availabilityStatus == 'Booked').length;
+    final totalCount = _allUnits.length;
+
+    showDialog(
+      context: context,
+      builder: (ctx1) => AlertDialog(
+        title: Text('Delete Project?', style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 16)),
+        content: Text(
+          'All $totalCount unit${totalCount == 1 ? '' : 's'} will also be deleted. This cannot be undone.',
+          style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx1),
+            child: Text('Cancel', style: GoogleFonts.inter(color: AppTheme.mutedText)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx1);
+              if (bookedCount > 0) {
+                _showSecondDeleteWarning(bookedCount);
+              } else {
+                _executeDeleteProject();
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error, foregroundColor: Colors.white),
+            child: Text('Delete', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSecondDeleteWarning(int bookedCount) {
+    showDialog(
+      context: context,
+      builder: (ctx2) => AlertDialog(
+        title: Text('Warning', style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 16, color: AppTheme.error)),
+        content: Text(
+          '$bookedCount unit${bookedCount == 1 ? '' : 's'} are booked and linked to leads. Deleting will remove all bookings. Continue?',
+          style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx2),
+            child: Text('Cancel', style: GoogleFonts.inter(color: AppTheme.mutedText)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx2);
+              _executeDeleteProject();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error, foregroundColor: Colors.white),
+            child: Text('Continue', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _executeDeleteProject() async {
+    if (_editProjectId == null) return;
+    setState(() => _isSaving = true);
+    try {
+      await FirestoreService.instance.deleteProjectWithChildren(_editProjectId!);
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.inventoryScreen, (r) => false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: AppTheme.success,
+            content: Text('Project deleted successfully',
+                style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isSaving = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: AppTheme.error, content: Text('Error: $e')),
+        );
+      }
+    }
+  }
 }
 
 /// Internal helper to hold state for a single unit type configuration row.
 class _UnitTypeConfig {
   String bhkType = '3BHK';
   String facing = 'East';
+  int bedrooms = 2;
+  int bathrooms = 2;
+  String furnishing = 'Unfurnished';
+  String carParking = 'None';
   final sbaCtrl = TextEditingController();
-  final baCtrl = TextEditingController();
-  final caCtrl = TextEditingController();
   final priceCtrl = TextEditingController();
   final countCtrl = TextEditingController(text: '10');
 
   void dispose() {
     sbaCtrl.dispose();
-    baCtrl.dispose();
-    caCtrl.dispose();
     priceCtrl.dispose();
     countCtrl.dispose();
   }

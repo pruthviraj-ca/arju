@@ -22,24 +22,33 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
-  String _selectedFilter = 'All';
-  String _selectedTagFilter = 'All';
-  String _selectedTempFilter = 'All';
+  List<String> _selectedFilter = [];
+  List<String> _selectedTagFilter = [];
+  List<String> _selectedTempFilter = [];
   String _sortBy = 'Created Date';
   bool _isLoading = true;
   DateTimeRange? _selectedDateRange;
   bool _isFilterExpanded = false;
 
+  bool _initializedFromArgs = false;
+  bool _fromReports = false;
+  String? _customTitle;
+  List<String>? _allowedLeadIds;
+  String? _reportsProject;
+  String? _reportsSource;
+  String? _startDateStr;
+  String? _endDateStr;
+
   bool get _isFilterActive =>
-      _selectedFilter != 'All' ||
-      _selectedTagFilter != 'All' ||
-      _selectedTempFilter != 'All';
+      _selectedFilter.isNotEmpty ||
+      _selectedTagFilter.isNotEmpty ||
+      _selectedTempFilter.isNotEmpty;
 
   int get _activeFiltersCount {
     int count = 0;
-    if (_selectedFilter != 'All') count++;
-    if (_selectedTagFilter != 'All') count++;
-    if (_selectedTempFilter != 'All') count++;
+    count += _selectedFilter.length;
+    count += _selectedTagFilter.length;
+    count += _selectedTempFilter.length;
     if (_selectedDateRange != null) count++;
     return count;
   }
@@ -125,9 +134,9 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
     // Restore filters from session persistence
     _searchController.text = MyLeadsFilterSession.searchQuery;
     _searchQuery = MyLeadsFilterSession.searchQuery;
-    _selectedFilter = MyLeadsFilterSession.selectedFilter;
-    _selectedTagFilter = MyLeadsFilterSession.selectedTagFilter;
-    _selectedTempFilter = MyLeadsFilterSession.selectedTempFilter;
+    _selectedFilter = List<String>.from(MyLeadsFilterSession.selectedFilter);
+    _selectedTagFilter = List<String>.from(MyLeadsFilterSession.selectedTagFilter);
+    _selectedTempFilter = List<String>.from(MyLeadsFilterSession.selectedTempFilter);
     _sortBy = MyLeadsFilterSession.sortBy;
     _selectedDateRange = MyLeadsFilterSession.selectedDateRange;
     _isFilterExpanded = MyLeadsFilterSession.isFilterExpanded;
@@ -147,6 +156,34 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
         MyLeadsFilterSession.searchQuery = _searchQuery;
       });
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_initializedFromArgs) {
+      _initializedFromArgs = true;
+      final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+      if (args != null && args['fromReports'] == true) {
+        _fromReports = true;
+        _customTitle = args['title'] as String?;
+        _allowedLeadIds = args['allowedLeadIds'] as List<String>?;
+        _reportsProject = args['filterProject'] as String?;
+        _reportsSource = args['filterSource'] as String?;
+        _startDateStr = args['startDateStr'] as String?;
+        _endDateStr = args['endDateStr'] as String?;
+
+        if (args['filterStatus'] != null) {
+          _selectedFilter = [args['filterStatus'] as String];
+        }
+        if (args['filterTag'] != null) {
+          _selectedTagFilter = [args['filterTag'] as String];
+        }
+        if (args['filterStatus'] != null || args['filterTag'] != null) {
+          _isFilterExpanded = true;
+        }
+      }
+    }
   }
 
   @override
@@ -202,7 +239,7 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
     }
 
     // 3. Status filter
-    if (_selectedFilter != 'All') {
+    if (_selectedFilter.isNotEmpty) {
       final filterMap = {
         'New': ['new'],
         'Called': ['called'],
@@ -212,8 +249,14 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
         'Won': ['won'],
         'Lost/Dead': ['lost/dead', 'lost', 'dead'],
       };
-      final targetStatuses = filterMap[_selectedFilter];
-      if (targetStatuses != null) {
+      final targetStatuses = <String>{};
+      for (final selected in _selectedFilter) {
+        final statuses = filterMap[selected];
+        if (statuses != null) {
+          targetStatuses.addAll(statuses);
+        }
+      }
+      if (targetStatuses.isNotEmpty) {
         result = result.where((l) {
           final leadStatus = (l['status'] as String? ?? '').toLowerCase();
           return targetStatuses.contains(leadStatus);
@@ -222,47 +265,87 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
     }
 
     // 4. Temperature filter
-    if (_selectedTempFilter != 'All') {
+    if (_selectedTempFilter.isNotEmpty) {
       result = result.where((l) {
         final temp = l['leadTemperature'] as String? ?? '';
-        return temp.toLowerCase() == _selectedTempFilter.toLowerCase();
+        return _selectedTempFilter.any((filterVal) => temp.toLowerCase() == filterVal.toLowerCase());
       }).toList();
     }
 
     // 5. Tag filter
-    if (_selectedTagFilter != 'All') {
-      result = result.where((l) => l['lastTag'] == _selectedTagFilter).toList();
+    if (_selectedTagFilter.isNotEmpty) {
+      result = result.where((l) {
+        final tag = l['lastTag'] as String? ?? '';
+        return _selectedTagFilter.contains(tag);
+      }).toList();
     }
 
-    // 6. Date range filter
-    if (_selectedDateRange != null) {
-      result = result.where((l) {
-        final fDateStr = l['followUpDate'] as String?;
-        if (fDateStr == null || fDateStr == 'none') return false;
-        try {
-          final parts = fDateStr.split('-');
-          if (parts.length != 3) return false;
-          final fDate = DateTime(
-            int.parse(parts[0]),
-            int.parse(parts[1]),
-            int.parse(parts[2]),
-          );
-          final start = DateTime(
-            _selectedDateRange!.start.year,
-            _selectedDateRange!.start.month,
-            _selectedDateRange!.start.day,
-          );
-          final end = DateTime(
-            _selectedDateRange!.end.year,
-            _selectedDateRange!.end.month,
-            _selectedDateRange!.end.day,
-          );
-          return fDate.isAfter(start.subtract(const Duration(seconds: 1))) &&
-              fDate.isBefore(end.add(const Duration(days: 1)));
-        } catch (e) {
-          return false;
-        }
-      }).toList();
+    // 6. Date range filter (only if not from Reports)
+    if (_selectedDateRange != null && !_fromReports) {
+      if (_sortBy == 'Follow-Up Date') {
+        result = result.where((l) {
+          final fDateStr = l['followUpDate'] as String?;
+          if (fDateStr == null || fDateStr == 'none') return false;
+          try {
+            final parts = fDateStr.split('-');
+            if (parts.length != 3) return false;
+            final fDate = DateTime(
+              int.parse(parts[0]),
+              int.parse(parts[1]),
+              int.parse(parts[2]),
+            );
+            final start = DateTime(
+              _selectedDateRange!.start.year,
+              _selectedDateRange!.start.month,
+              _selectedDateRange!.start.day,
+            );
+            final end = DateTime(
+              _selectedDateRange!.end.year,
+              _selectedDateRange!.end.month,
+              _selectedDateRange!.end.day,
+            );
+            return fDate.isAfter(start.subtract(const Duration(seconds: 1))) &&
+                fDate.isBefore(end.add(const Duration(days: 1)));
+          } catch (e) {
+            return false;
+          }
+        }).toList();
+      } else if (_sortBy == 'Created Date') {
+        result = result.where((l) {
+          final cDateStr = l['createdAt'] as String?;
+          if (cDateStr == null || cDateStr.isEmpty) return false;
+          try {
+            final cDate = DateTime.parse(cDateStr);
+            final start = DateTime(
+              _selectedDateRange!.start.year,
+              _selectedDateRange!.start.month,
+              _selectedDateRange!.start.day,
+            );
+            final end = DateTime(
+              _selectedDateRange!.end.year,
+              _selectedDateRange!.end.month,
+              _selectedDateRange!.end.day,
+            );
+            final targetDate = DateTime(cDate.year, cDate.month, cDate.day);
+            return (targetDate.isAfter(start.subtract(const Duration(seconds: 1))) || targetDate.isAtSameMomentAs(start)) &&
+                (targetDate.isBefore(end.add(const Duration(days: 1))) || targetDate.isAtSameMomentAs(end));
+          } catch (e) {
+            return false;
+          }
+        }).toList();
+      }
+    }
+
+    if (_fromReports) {
+      if (_allowedLeadIds != null) {
+        result = result.where((l) => _allowedLeadIds!.contains(l['id'])).toList();
+      }
+      if (_reportsProject != null) {
+        result = result.where((l) => (l['property'] as String? ?? '').toLowerCase() == _reportsProject!.toLowerCase()).toList();
+      }
+      if (_reportsSource != null) {
+        result = result.where((l) => (l['leadSource'] as String? ?? '').toLowerCase() == _reportsSource!.toLowerCase()).toList();
+      }
     }
 
     return result;
@@ -321,6 +404,39 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
     }
   }
 
+  Future<void> _selectCreatedDateRange() async {
+    final DateTimeRange? picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      initialDateRange: _selectedDateRange ?? DateTimeRange(
+        start: DateTime.now().subtract(const Duration(days: 7)),
+        end: DateTime.now().add(const Duration(days: 3)),
+      ),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppTheme.primary,
+              onPrimary: Colors.white,
+              onSurface: AppTheme.darkText,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedDateRange = picked;
+        _sortBy = 'Created Date';
+        MyLeadsFilterSession.selectedDateRange = picked;
+        MyLeadsFilterSession.sortBy = 'Created Date';
+      });
+    }
+  }
+
   void _showSortSheet() {
     showModalBottomSheet(
       context: context,
@@ -335,6 +451,8 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
           Navigator.pop(ctx);
           if (val == 'Follow-Up Date') {
             await _selectFollowUpDateRange();
+          } else if (val == 'Created Date') {
+            await _selectCreatedDateRange();
           } else {
             setState(() {
               _sortBy = val;
@@ -344,6 +462,28 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
             });
           }
         },
+      ),
+    );
+  }
+
+  Widget _buildActiveFilterChip(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.primaryContainer,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: AppTheme.primary.withAlpha(128),
+          width: 1.5,
+        ),
+      ),
+      child: Text(
+        label,
+        style: GoogleFonts.inter(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: AppTheme.primary,
+        ),
       ),
     );
   }
@@ -361,7 +501,11 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
           _scaffoldKey.currentState?.closeDrawer();
           return;
         }
-        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.dashboardScreen, (route) => false);
+        if (_fromReports) {
+          Navigator.pop(context);
+        } else {
+          Navigator.pushNamedAndRemoveUntil(context, AppRoutes.dashboardScreen, (route) => false);
+        }
       },
       child: Scaffold(
         key: _scaffoldKey,
@@ -372,21 +516,29 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
         elevation: 0,
         scrolledUnderElevation: 1,
         shadowColor: AppTheme.borderColor,
-        leading: Builder(
-          builder: (context) => IconButton(
-            onPressed: () => Scaffold.of(context).openDrawer(),
-            icon: CustomIconWidget(
-              iconName: 'menu',
-              color: AppTheme.primary,
-              size: 24,
-            ),
-          ),
-        ),
+        leading: _fromReports
+            ? IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(
+                  Icons.arrow_back,
+                  color: AppTheme.primary,
+                ),
+              )
+            : Builder(
+                builder: (context) => IconButton(
+                  onPressed: () => Scaffold.of(context).openDrawer(),
+                  icon: const CustomIconWidget(
+                    iconName: 'menu',
+                    color: AppTheme.primary,
+                    size: 24,
+                  ),
+                ),
+              ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'My Leads',
+              _fromReports && _customTitle != null ? _customTitle! : 'My Leads',
               style: GoogleFonts.inter(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -394,10 +546,12 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
               ),
             ),
             Text(
-              '${_leads.length} total · ${_leads.length - _leads.where((l) {
-                final status = (l['status'] as String? ?? '').toLowerCase();
-                return status == 'lost/dead' || status == 'lost' || status == 'dead';
-              }).length} active',
+              _fromReports
+                  ? '${filtered.length} lead${filtered.length == 1 ? '' : 's'}'
+                  : '${_leads.length} total · ${_leads.length - _leads.where((l) {
+                      final status = (l['status'] as String? ?? '').toLowerCase();
+                      return status == 'lost/dead' || status == 'lost' || status == 'dead';
+                    }).length} active',
               style: GoogleFonts.inter(
                 fontSize: 11,
                 fontWeight: FontWeight.w400,
@@ -453,16 +607,40 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                 selectedTag: _selectedTagFilter,
                 selectedTemp: _selectedTempFilter,
                 onStatusChanged: (val) => setState(() {
-                  _selectedFilter = val;
-                  MyLeadsFilterSession.selectedFilter = val;
+                  if (val == 'All') {
+                    _selectedFilter = [];
+                  } else {
+                    if (_selectedFilter.contains(val)) {
+                      _selectedFilter = List<String>.from(_selectedFilter)..remove(val);
+                    } else {
+                      _selectedFilter = List<String>.from(_selectedFilter)..add(val);
+                    }
+                  }
+                  MyLeadsFilterSession.selectedFilter = _selectedFilter;
                 }),
                 onTagChanged: (val) => setState(() {
-                  _selectedTagFilter = val;
-                  MyLeadsFilterSession.selectedTagFilter = val;
+                  if (val == 'All') {
+                    _selectedTagFilter = [];
+                  } else {
+                    if (_selectedTagFilter.contains(val)) {
+                      _selectedTagFilter = List<String>.from(_selectedTagFilter)..remove(val);
+                    } else {
+                      _selectedTagFilter = List<String>.from(_selectedTagFilter)..add(val);
+                    }
+                  }
+                  MyLeadsFilterSession.selectedTagFilter = _selectedTagFilter;
                 }),
                 onTempChanged: (val) => setState(() {
-                  _selectedTempFilter = val;
-                  MyLeadsFilterSession.selectedTempFilter = val;
+                  if (val == 'All') {
+                    _selectedTempFilter = [];
+                  } else {
+                    if (_selectedTempFilter.contains(val)) {
+                      _selectedTempFilter = List<String>.from(_selectedTempFilter)..remove(val);
+                    } else {
+                      _selectedTempFilter = List<String>.from(_selectedTempFilter)..add(val);
+                    }
+                  }
+                  MyLeadsFilterSession.selectedTempFilter = _selectedTempFilter;
                 }),
               ),
               crossFadeState: _isFilterExpanded
@@ -496,11 +674,17 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        _selectedDateRange!.start.year == _selectedDateRange!.end.year &&
-                                _selectedDateRange!.start.month == _selectedDateRange!.end.month &&
-                                _selectedDateRange!.start.day == _selectedDateRange!.end.day
-                            ? 'Follow-up: ${_formatDate(_selectedDateRange!.start)}'
-                            : 'Follow-up: ${_formatDate(_selectedDateRange!.start)} - ${_formatDate(_selectedDateRange!.end)}',
+                        _sortBy == 'Created Date'
+                            ? (_selectedDateRange!.start.year == _selectedDateRange!.end.year &&
+                                    _selectedDateRange!.start.month == _selectedDateRange!.end.month &&
+                                    _selectedDateRange!.start.day == _selectedDateRange!.end.day
+                                ? 'Created: ${_formatDate(_selectedDateRange!.start)}'
+                                : 'Created: ${_formatDate(_selectedDateRange!.start)} - ${_formatDate(_selectedDateRange!.end)}')
+                            : (_selectedDateRange!.start.year == _selectedDateRange!.end.year &&
+                                    _selectedDateRange!.start.month == _selectedDateRange!.end.month &&
+                                    _selectedDateRange!.start.day == _selectedDateRange!.end.day
+                                ? 'Follow-up: ${_formatDate(_selectedDateRange!.start)}'
+                                : 'Follow-up: ${_formatDate(_selectedDateRange!.start)} - ${_formatDate(_selectedDateRange!.end)}'),
                         style: GoogleFonts.inter(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
@@ -525,6 +709,24 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                   ),
                 ),
               ),
+            if (_fromReports && (_reportsProject != null || _reportsSource != null || (_startDateStr != null && _endDateStr != null)))
+              Container(
+                color: Colors.white,
+                padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (_startDateStr != null && _endDateStr != null)
+                      _buildActiveFilterChip('Report Range: $_startDateStr - $_endDateStr'),
+                    if (_reportsProject != null)
+                      _buildActiveFilterChip('Project: $_reportsProject'),
+                    if (_reportsSource != null)
+                      _buildActiveFilterChip('Source: $_reportsSource'),
+                  ],
+                ),
+              ),
             // Results count bar
             Container(
               color: Colors.white,
@@ -540,17 +742,17 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                     ),
                   ),
                   const Spacer(),
-                  if (_selectedFilter != 'All' ||
-                      _selectedTagFilter != 'All' ||
-                      _selectedTempFilter != 'All' ||
+                  if (_selectedFilter.isNotEmpty ||
+                      _selectedTagFilter.isNotEmpty ||
+                      _selectedTempFilter.isNotEmpty ||
                       _selectedDateRange != null ||
                       _searchQuery.isNotEmpty)
                     GestureDetector(
                       onTap: () {
                         setState(() {
-                          _selectedFilter = 'All';
-                          _selectedTagFilter = 'All';
-                          _selectedTempFilter = 'All';
+                          _selectedFilter = [];
+                          _selectedTagFilter = [];
+                          _selectedTempFilter = [];
                           _selectedDateRange = null;
                           _searchController.clear();
                           _searchQuery = '';
@@ -602,22 +804,26 @@ class _MyLeadsScreenState extends State<MyLeadsScreen> {
                                     : 'No leads match the selected filters. Clear filters to see all leads.',
                                 actionLabel:
                                     _searchQuery.isNotEmpty ||
-                                        _selectedFilter != 'All'
+                                        _selectedFilter.isNotEmpty ||
+                                        _selectedTagFilter.isNotEmpty ||
+                                        _selectedTempFilter.isNotEmpty
                                     ? 'Clear Filters'
                                     : null,
                                 onAction:
                                     _searchQuery.isNotEmpty ||
-                                        _selectedFilter != 'All'
+                                        _selectedFilter.isNotEmpty ||
+                                        _selectedTagFilter.isNotEmpty ||
+                                        _selectedTempFilter.isNotEmpty
                                     ? () {
                                         setState(() {
-                                          _selectedFilter = 'All';
-                                          _selectedTagFilter = 'All';
-                                          _selectedTempFilter = 'All';
+                                          _selectedFilter = [];
+                                          _selectedTagFilter = [];
+                                          _selectedTempFilter = [];
                                           _searchController.clear();
                                           _searchQuery = '';
-                                          MyLeadsFilterSession.selectedFilter = 'All';
-                                          MyLeadsFilterSession.selectedTagFilter = 'All';
-                                          MyLeadsFilterSession.selectedTempFilter = 'All';
+                                          MyLeadsFilterSession.selectedFilter = [];
+                                          MyLeadsFilterSession.selectedTagFilter = [];
+                                          MyLeadsFilterSession.selectedTempFilter = [];
                                           MyLeadsFilterSession.searchQuery = '';
                                         });
                                       }

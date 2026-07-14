@@ -18,7 +18,6 @@ import '../../services/firestore_service.dart';
 import './widgets/call_note_card_widget.dart';
 import './widgets/add_note_form_widget.dart';
 import './widgets/site_visit_scheduler_widget.dart';
-import './widgets/inventory_snapshot_widget.dart';
 import '../../utils/tag_colors.dart';
 
 class LeadDetailScreen extends StatefulWidget {
@@ -357,7 +356,9 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                               projectId,
                               selectedUnit!.id,
                               {
+                                'availability_status': 'Booked',
                                 'availabilityStatus': 'Booked',
+                                'booking_lead_id': _leadId,
                                 'bookingLeadId': _leadId,
                                 'updatedAt': DateTime.now().toIso8601String(),
                               },
@@ -700,10 +701,6 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                 },
               ),
               const SizedBox(height: 16),
-              InventorySnapshotWidget(
-                projectName: _lead['property'] as String? ?? '',
-              ),
-              const SizedBox(height: 16),
 
               // ── 1. Add Call Note form — top, for quick logging ───────────────
               AddNoteFormWidget(
@@ -1015,41 +1012,41 @@ Team TruAssets
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 22),
           const Divider(height: 1, color: AppTheme.borderColor),
-          const SizedBox(height: 14),
+          const SizedBox(height: 22),
           // Info rows
           _InfoRow(
             icon: 'apartment',
             label: 'Property',
-            value: widget.lead['property'] as String,
+            value: widget.lead['property'] as String? ?? '—',
             onTap: widget.onPropertyTap,
           ),
+          const SizedBox(height: 8),
           if (widget.lead['alternatePhone'] != null && (widget.lead['alternatePhone'] as String).isNotEmpty) ...[
-            const SizedBox(height: 8),
             _InfoRow(
               icon: Icons.phone_android,
               label: 'Alternate Phone',
               value: widget.lead['alternatePhone'] as String,
             ),
+            const SizedBox(height: 8),
           ],
           if (widget.lead['email'] != null && (widget.lead['email'] as String).isNotEmpty) ...[
-            const SizedBox(height: 8),
             _InfoRow(
               icon: Icons.email_outlined,
               label: 'Email',
               value: widget.lead['email'] as String,
             ),
+            const SizedBox(height: 8),
           ],
           if (widget.lead['source'] != null && (widget.lead['source'] as String).isNotEmpty) ...[
-            const SizedBox(height: 8),
             _InfoRow(
               icon: Icons.campaign_outlined,
               label: 'Lead Source',
               value: widget.lead['source'] as String,
             ),
+            const SizedBox(height: 8),
           ],
-          const SizedBox(height: 8),
           _InfoRow(
             icon: Icons.access_time_outlined,
             label: 'Lead Generated',

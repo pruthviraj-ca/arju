@@ -135,3 +135,134 @@ exports.twilioVoiceWebhook = functions.https.onRequest(async (req, res) => {
     return res.send("<Response><Say>An internal error occurred during the call.</Say></Response>");
   }
 });
+
+/**
+ * HTTP Endpoint: Get count of follow-ups scheduled on a specific date for an agent.
+ * GET /api/leads/followup-count?date=YYYY-MM-DD&agent_id=X&exclude_lead_id=Y
+ */
+exports.followupCount = functions.https.onRequest(async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  if (req.method === "OPTIONS") {
+    res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type");
+    res.set("Access-Control-Max-Age", "3600");
+    return res.status(204).send("");
+  }
+
+  try {
+    const { date, agent_id, exclude_lead_id } = req.query;
+
+    if (!date || !agent_id) {
+      return res.status(400).json({ error: "Missing date or agent_id query parameter" });
+    }
+
+    const leadsRef = admin.firestore().collection("users").doc(agent_id).collection("leads");
+    const query = leadsRef.where("followUpDate", "==", date);
+    
+    const snapshot = await query.count().get();
+    let count = snapshot.data().count;
+
+    if (exclude_lead_id) {
+      const leadDoc = await leadsRef.doc(exclude_lead_id).get();
+      if (leadDoc.exists && leadDoc.data().followUpDate === date) {
+        count = Math.max(0, count - 1);
+      }
+    }
+
+    return res.json({ count });
+  } catch (err) {
+    console.error("Error checking follow-up count:", err);
+    return res.status(500).json({ error: err.message || "Internal Server Error" });
+  }
+});
+
+/**
+ * Firestore Trigger: Duplicate new documents in the user's leads collection
+ * to a secondary top-level leads_archive collection for redundancy.
+ */
+exports.archiveNewLead = functions.firestore
+  .document("users/{userId}/leads/{leadId}")
+  .onCreate(async (snapshot, context) => {
+    const leadData = snapshot.data();
+    const leadId = context.params.leadId;
+    const userId = context.params.userId;
+
+    console.log(`Archiving new lead created: Lead ID = ${leadId}, User ID = ${userId}`);
+
+    try {
+      await admin.firestore().collection("leads_archive").doc(`${userId}_${leadId}`).set({
+        ...leadData,
+        originalLeadId: leadId,
+        agentId: userId,
+        archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log(`Successfully archived lead ${leadId} for user ${userId}`);
+    } catch (error) {
+      console.error(`Failed to archive lead ${leadId} for user ${userId}:`, error);
+    }
+  });
+
+/**
+ * HTTP Endpoint: Receive real-time webhooks from MagicBricks when a lead is generated.
+ * POST /magicbricksWebhook?agent_id=AGENT_UID
+ */
+exports.magicbricksWebhook = functions.https.onRequest(async (req, res) => {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method Not Allowed. Use POST." });
+  }
+
+  try {
+    const { agent_id } = req.query;
+    if (!agent_id) {
+      console.error("Missing agent_id query parameter in webhook URL");
+      return res.status(400).json({ error: "Missing agent_id query parameter." });
+    }
+
+    const payload = req.body || {};
+    console.log("Received MagicBricks Webhook Payload:", JSON.stringify(payload));
+
+    const clientName = payload.name || payload.Name || payload.clientName || payload.fullname || "MagicBricks Lead";
+    const phone = payload.phone || payload.Phone || payload.mobile || payload.Mobile || "";
+    const email = payload.email || payload.Email || "";
+    const property = payload.property || payload.Property || payload.projectId || payload.project || "Any";
+
+    if (!phone) {
+      console.error("Missing phone number in webhook payload");
+      return res.status(400).json({ error: "Invalid payload. Phone number is required." });
+    }
+
+    const leadsRef = admin.firestore().collection("users").doc(agent_id).collection("leads");
+
+    // Check for duplicate
+    const duplicateQuery = await leadsRef.where("phone", "==", phone).limit(1).get();
+    if (!duplicateQuery.empty) {
+      console.log(`Lead with phone ${phone} already exists for agent ${agent_id}. Skipping.`);
+      return res.status(200).json({ status: "skipped", message: "Duplicate lead detected." });
+    }
+
+    const newLead = {
+      clientName: clientName,
+      phone: phone,
+      email: email,
+      property: property,
+      status: "new",
+      lastTag: "MagicBricks",
+      followUpDate: "none",
+      lastNote: "Auto-imported via MagicBricks Webhook Integration.",
+      isActive: true,
+      callDuration: "—",
+      createdAt: new Date().toISOString(),
+      callsCount: 0,
+      source: "MagicBricks",
+    };
+
+    const docRef = await leadsRef.add(newLead);
+    console.log(`Successfully imported MagicBricks webhook lead: ${docRef.id} for agent ${agent_id}`);
+
+    return res.status(201).json({ status: "success", leadId: docRef.id });
+  } catch (err) {
+    console.error("Error processing MagicBricks webhook:", err);
+    return res.status(500).json({ error: err.message || "Internal Server Error" });
+  }
+});
+

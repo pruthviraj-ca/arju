@@ -20,11 +20,11 @@ class ProjectCardWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final available = units.where((u) => u.availabilityStatus == 'Available').length;
-    final resale = units.where((u) => u.availabilityStatus == 'Resale').length;
-    final rental = units.where((u) => u.availabilityStatus == 'Rental').length;
+    final available = units.where((u) => u.unitType == 'Fresh' && u.availabilityStatus == 'Available').length;
+    final resale = units.where((u) => u.unitType == 'Resale' && u.availabilityStatus == 'Available').length;
+    final rental = units.where((u) => u.unitType == 'Rental' && u.availabilityStatus == 'Available').length;
     final booked = units.where((u) =>
-        u.availabilityStatus == 'Booked' || u.availabilityStatus == 'Sold').length;
+        u.availabilityStatus == 'Booked' || u.availabilityStatus == 'Sold' || u.availabilityStatus == 'Hold').length;
 
     return GestureDetector(
       onTap: onTap,
@@ -86,19 +86,27 @@ class ProjectCardWidget extends StatelessWidget {
                 ),
               ],
             ),
+            // Description preview (if exists)
+            if (project.description.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                project.description,
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontStyle: FontStyle.italic,
+                  color: AppTheme.mutedText,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
             const SizedBox(height: 10),
-            // Row 3: Towers + Units
+            // Row 3: Towers
             Row(
               children: [
                 _StatChip(
                   icon: 'domain',
                   label: '${project.totalTowers} Towers',
-                  color: AppTheme.primary,
-                ),
-                const SizedBox(width: 12),
-                _StatChip(
-                  icon: 'home',
-                  label: '${units.length} Units',
                   color: AppTheme.primary,
                 ),
               ],

@@ -237,39 +237,7 @@ class _CallNoteCardWidgetState extends State<CallNoteCardWidget> {
                   ],
                 ),
               ),
-              // Action icons for manual notes only
-              if (isManual) ...[
-                // Copy icon — always visible
-                SizedBox(
-                  width: 28,
-                  height: 28,
-                  child: IconButton(
-                    onPressed: _copyNoteText,
-                    icon: const Icon(Icons.copy_rounded, size: 14),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    color: AppTheme.mutedText,
-                    tooltip: 'Copy note',
-                  ),
-                ),
-                // Edit icon — only within 15-minute window
-                if (canEdit) ...[
-                  const SizedBox(width: 2),
-                  SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: IconButton(
-                      onPressed: _isEditing ? null : _startEditing,
-                      icon: const Icon(Icons.edit_outlined, size: 14),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      color: AppTheme.primary,
-                      tooltip: 'Edit note',
-                    ),
-                  ),
-                ],
-                const SizedBox(width: 4),
-              ],
+
               if (tag.isNotEmpty)
                 Builder(
                   builder: (context) {
@@ -375,14 +343,66 @@ class _CallNoteCardWidgetState extends State<CallNoteCardWidget> {
             ),
           ] else ...[
             // Note text (read-only)
-            Text(
-              text,
-              style: GoogleFonts.inter(
-                fontSize: 13,
-                color: AppTheme.darkText,
-                height: 1.5,
+            if (isManual)
+              Text.rich(
+                TextSpan(
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: AppTheme.darkText,
+                    height: 1.5,
+                  ),
+                  children: [
+                    TextSpan(text: text),
+                    const WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: SizedBox(width: 6),
+                    ),
+                    if (canEdit) ...[
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: GestureDetector(
+                          onTap: _startEditing,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 2),
+                            child: Icon(
+                              Icons.edit_outlined,
+                              size: 14,
+                              color: AppTheme.primary,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: SizedBox(width: 4),
+                      ),
+                    ],
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: GestureDetector(
+                        onTap: _copyNoteText,
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 2),
+                          child: Icon(
+                            Icons.copy_rounded,
+                            size: 14,
+                            color: AppTheme.mutedText,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Text(
+                text,
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: AppTheme.darkText,
+                  height: 1.5,
+                ),
               ),
-            ),
           ],
 
           // Footer: follow-up + call duration

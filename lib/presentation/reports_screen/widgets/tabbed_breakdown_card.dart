@@ -23,6 +23,8 @@ class TabbedBreakdownCard extends StatefulWidget {
   final Map<String, int> bookingProjectCounts;
   final Map<String, int> bookingSourceCounts;
 
+  final void Function(int tabIndex, String section, String rowLabel)? onRowTap;
+
   const TabbedBreakdownCard({
     super.key,
     required this.leadStatusCounts,
@@ -34,6 +36,7 @@ class TabbedBreakdownCard extends StatefulWidget {
     required this.bookingStatusCounts,
     required this.bookingProjectCounts,
     required this.bookingSourceCounts,
+    this.onRowTap,
   });
 
   @override
@@ -305,6 +308,9 @@ class _TabbedBreakdownCardState extends State<TabbedBreakdownCard> {
               barFraction: barFraction,
               fgColor: fgColor,
               bgColor: bgColor,
+              onTap: widget.onRowTap == null
+                  ? null
+                  : () => widget.onRowTap!(_selectedTabIndex, title, entry.key),
             );
           }),
       ],
@@ -346,6 +352,7 @@ class _BarGraphRow extends StatelessWidget {
   final double barFraction;
   final Color fgColor;
   final Color bgColor;
+  final VoidCallback? onTap;
 
   const _BarGraphRow({
     required this.label,
@@ -353,13 +360,15 @@ class _BarGraphRow extends StatelessWidget {
     required this.barFraction,
     required this.fgColor,
     required this.bgColor,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+    final rowContent = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
@@ -400,6 +409,14 @@ class _BarGraphRow extends StatelessWidget {
                   ),
                 ),
               ),
+              if (onTap != null) ...[
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.chevron_right,
+                  size: 16,
+                  color: fgColor.withAlpha(150),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 6),
@@ -416,5 +433,20 @@ class _BarGraphRow extends StatelessWidget {
         ],
       ),
     );
+
+    if (onTap != null) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: rowContent,
+          ),
+        ),
+      );
+    }
+    return rowContent;
   }
 }

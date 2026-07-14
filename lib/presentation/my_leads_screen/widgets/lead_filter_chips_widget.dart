@@ -6,9 +6,9 @@ class LeadFilterChipsWidget extends StatelessWidget {
   final List<String> statusFilters;
   final List<String> tagFilters;
   final List<String> tempFilters;
-  final String selectedStatus;
-  final String selectedTag;
-  final String selectedTemp;
+  final List<String> selectedStatus;
+  final List<String> selectedTag;
+  final List<String> selectedTemp;
   final void Function(String) onStatusChanged;
   final void Function(String) onTagChanged;
   final void Function(String) onTempChanged;
@@ -57,10 +57,12 @@ class LeadFilterChipsWidget extends StatelessWidget {
                     child: ListView.separated(
                       scrollDirection: Axis.horizontal,
                       itemCount: statusFilters.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                       separatorBuilder: (_, __) => const SizedBox(width: 8),
                       itemBuilder: (context, idx) {
                         final filter = statusFilters[idx];
-                        final isSelected = filter == selectedStatus;
+                        final isSelected = filter == 'All'
+                            ? selectedStatus.isEmpty
+                            : selectedStatus.contains(filter);
                         return _FilterChip(
                           label: filter,
                           isSelected: isSelected,
@@ -97,12 +99,14 @@ class LeadFilterChipsWidget extends StatelessWidget {
                   child: SizedBox(
                     height: 36,
                     child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
+                       scrollDirection: Axis.horizontal,
                       itemCount: tagFilters.length,
                       separatorBuilder: (_, __) => const SizedBox(width: 8),
                       itemBuilder: (context, idx) {
                         final tag = tagFilters[idx];
-                        final isSelected = tag == selectedTag;
+                        final isSelected = tag == 'All'
+                            ? selectedTag.isEmpty
+                            : selectedTag.contains(tag);
                         final isAll = tag == 'All';
                         return _FilterChip(
                           label: tag,
@@ -145,7 +149,9 @@ class LeadFilterChipsWidget extends StatelessWidget {
                       separatorBuilder: (_, __) => const SizedBox(width: 8),
                       itemBuilder: (context, idx) {
                         final temp = tempFilters[idx];
-                        final isSelected = temp == selectedTemp;
+                        final isSelected = temp == 'All'
+                            ? selectedTemp.isEmpty
+                            : selectedTemp.contains(temp);
                         
                         Color bg;
                         Color border;

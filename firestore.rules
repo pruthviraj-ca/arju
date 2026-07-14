@@ -1,8 +1,72 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    
+    // Helper function to check if the request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if the authenticated user is the owner of the data
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Rules for the users collection and all its subcollections
+    match /users/{userId} {
+      // Allow read, create, and update for the owner, but restrict delete
+      allow read, create, update: if isOwner(userId);
+      allow delete: if false;
+
+      // Leads collection: Owner can read/write but cannot delete to prevent collection deletion
+      match /leads/{leadId} {
+        allow read, create, update: if isOwner(userId);
+        allow delete: if false;
+      }
+
+      // Notes collection: Owner has full CRUD access
+      match /notes/{noteId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Site visits collection: Owner has full CRUD access
+      match /site_visits/{siteVisitId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Call logs collection: Owner has full CRUD access
+      match /calllog/{callLogId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Projects collection: Owner can read/write, deletion of projects is allowed
+      match /projects/{projectId} {
+        allow read, write: if isOwner(userId);
+
+        // Towers subcollection
+        match /towers/{towerId} {
+          allow read, write: if isOwner(userId);
+        }
+
+        // Units subcollection
+        match /units/{unitId} {
+          allow read, write: if isOwner(userId);
+
+          // Registration stages subcollection
+          match /registration_stages/{stageId} {
+            allow read, write: if isOwner(userId);
+          }
+        }
+      }
+    }
+
+    // Secondary collection: leads_archive
+    // Used for redundancy, written only by backend Cloud Functions
+    match /leads_archive/{archiveId} {
+      // Authenticated agents can read their own archived leads
+      allow read: if isAuthenticated() && resource.data.agentId == request.auth.uid;
+      // Clients cannot write or delete directly (only Cloud Functions/Admin SDK can write)
+      allow write: if false;
     }
   }
 }

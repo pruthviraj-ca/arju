@@ -10,6 +10,7 @@ import '../../services/migration_service.dart';
 import '../../widgets/app_navigation.dart';
 import './widgets/follow_up_buckets_widget.dart';
 import './widgets/stat_cards_widget.dart';
+import '../../utils/phone_utils.dart';
 
 // TODO: Replace with Riverpod/Bloc for production state management
 class DashboardScreen extends StatefulWidget {
@@ -577,14 +578,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
 
     if (phone != null && phone.isNotEmpty) {
-      // Normalize: strip +91, spaces, dashes -> plain 10 digits -> prepend 91
-      String digits = phone.replaceAll(RegExp(r'\D'), '');
-      if (digits.length >= 10) {
-        digits = digits.substring(digits.length - 10);
-      }
-      final normalizedPhone = '91$digits';
-
-      final uri = Uri.parse('tel:$normalizedPhone');
+      final formattedPhone = formatPhoneForCall(phone);
+      final uri = Uri.parse('tel:$formattedPhone');
       try {
         if (await canLaunchUrl(uri)) {
           await launchUrl(uri);
@@ -594,7 +589,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             _pendingReturnBucket = bucketTitle;
           });
         } else {
-          debugPrint('Could not launch tel:$normalizedPhone');
+          debugPrint('Could not launch tel:$formattedPhone');
         }
       } catch (e) {
         debugPrint('Error launching dialer: $e');

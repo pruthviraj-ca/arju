@@ -255,12 +255,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (_scaffoldKey.currentState?.isDrawerOpen == true) {
+          _scaffoldKey.currentState?.closeDrawer();
+          return;
+        }
         Navigator.pushNamedAndRemoveUntil(
           context, AppRoutes.dashboardScreen, (r) => false,
         );
-        return false;
       },
       child: Scaffold(
         key: _scaffoldKey,
@@ -298,6 +303,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               bookingStatusCounts: _bookingStatusCounts,
                               bookingProjectCounts: _bookingProjectCounts,
                               bookingSourceCounts: _bookingSourceCounts,
+                              onRowTap: _handleRowTap,
                             ),
                           ],
                         ),
@@ -393,6 +399,178 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
+  // ─── Navigation & Deep Linking ─────────────────────────────────────────────
+
+  void _navigateToMyLeads({
+    required String title,
+    required List<String> allowedLeadIds,
+    String? filterStatus,
+    String? filterProject,
+    String? filterSource,
+  }) {
+    final fmt = DateFormat('MMM dd, yyyy');
+    final startDateStr = fmt.format(_startDate);
+    final endDateStr = fmt.format(_endDate);
+
+    Navigator.pushNamed(
+      context,
+      AppRoutes.myLeadsScreen,
+      arguments: {
+        'fromReports': true,
+        'title': title,
+        'allowedLeadIds': allowedLeadIds,
+        'filterStatus': filterStatus,
+        'filterProject': filterProject,
+        'filterSource': filterSource,
+        'startDateStr': startDateStr,
+        'endDateStr': endDateStr,
+        'reportsDateRange': DateTimeRange(start: _startDate, end: _endDate),
+      },
+    );
+  }
+
+  void _handleRowTap(int tabIndex, String section, String rowLabel) {
+    List<String> allowedIds = [];
+    String? filterStatus;
+    String? filterProject;
+    String? filterSource;
+    String title = "";
+
+    final isStatus = section.toUpperCase().contains("STATUS");
+    final isProject = section.toUpperCase().contains("PROJECT");
+    final isSource = section.toUpperCase().contains("SOURCE");
+
+    if (tabIndex == 0) {
+      // Leads Tab
+      if (isStatus) {
+        allowedIds = _filteredLeads
+            .where((l) => (l.status.isEmpty ? 'New' : l.status).toLowerCase() == rowLabel.toLowerCase())
+            .map((l) => l.id)
+            .toList();
+        filterStatus = getStatusFilterName(rowLabel);
+        title = "${filterStatus ?? rowLabel} Leads";
+      } else if (isProject) {
+        allowedIds = _filteredLeads
+            .where((l) => (l.property.isEmpty ? 'Unknown' : l.property).toLowerCase() == rowLabel.toLowerCase())
+            .map((l) => l.id)
+            .toList();
+        filterProject = rowLabel;
+        title = "$rowLabel Leads";
+      } else if (isSource) {
+        allowedIds = _filteredLeads
+            .where((l) => (l.source.isEmpty ? 'Unknown' : l.source).toLowerCase() == rowLabel.toLowerCase())
+            .map((l) => l.id)
+            .toList();
+        filterSource = rowLabel;
+        title = "$rowLabel Leads";
+      }
+    } else if (tabIndex == 1) {
+      // SVs Tab
+      var targetVisits = _filteredVisits;
+      if (isStatus) {
+        targetVisits = _filteredVisits
+            .where((v) => (v.status.isEmpty ? 'Scheduled' : v.status).toLowerCase() == rowLabel.toLowerCase())
+            .toList();
+        title = "SV $rowLabel Leads";
+      } else if (isProject) {
+        targetVisits = _filteredVisits
+            .where((v) => (v.property.isEmpty ? 'Unknown' : v.property).toLowerCase() == rowLabel.toLowerCase())
+            .toList();
+        filterProject = rowLabel;
+        title = "$rowLabel SV Leads";
+      } else if (isSource) {
+        targetVisits = _filteredVisits.where((v) {
+          final lead = _allLeads.firstWhere(
+            (l) => l.id == v.leadId,
+            orElse: () => const LeadModel(
+              id: '', clientName: '', phone: '', property: '', status: '',
+              lastTag: '', followUpDate: '', lastNote: '', isActive: false,
+              callDuration: '', createdAt: '', callsCount: 0, source: 'Unknown'
+            ),
+          );
+          final source = (lead.id.isEmpty || lead.source.isEmpty) ? 'Unknown' : lead.source;
+          return source.toLowerCase() == rowLabel.toLowerCase();
+        }).toList();
+        filterSource = rowLabel;
+        title = "$rowLabel SV Leads";
+      }
+      allowedIds = targetVisits.map((v) => v.leadId).toSet().toList();
+    } else if (tabIndex == 2) {
+      // Bookings Tab
+      final wonLeads = _filteredLeads.where((l) => l.status.toLowerCase() == 'won').toList();
+      filterStatus = "Won";
+
+      if (isStatus) {
+        allowedIds = wonLeads.map((l) => l.id).toList();
+        title = "Won Bookings";
+      } else if (isProject) {
+        allowedIds = wonLeads
+            .where((l) => (l.property.isEmpty ? 'Unknown' : l.property).toLowerCase() == rowLabel.toLowerCase())
+            .map((l) => l.id)
+            .toList();
+        filterProject = rowLabel;
+        title = "$rowLabel Bookings";
+      } else if (isSource) {
+        allowedIds = wonLeads
+            .where((l) => (l.source.isEmpty ? 'Unknown' : l.source).toLowerCase() == rowLabel.toLowerCase())
+            .map((l) => l.id)
+            .toList();
+        filterSource = rowLabel;
+        title = "$rowLabel Bookings";
+      }
+    }
+
+    _navigateToMyLeads(
+      title: title,
+      allowedLeadIds: allowedIds,
+      filterStatus: filterStatus,
+      filterProject: filterProject,
+      filterSource: filterSource,
+    );
+  }
+
+  String? getStatusFilterName(String status) {
+    switch (status.toLowerCase()) {
+      case 'new': return 'New';
+      case 'called': return 'Called';
+      case 'follow-up': return 'Follow-Up';
+      case 'site visit scheduled': return 'SV Scheduled';
+      case 'site visit done':
+      case 'visited': return 'Visited';
+      case 'won': return 'Won';
+      case 'lost/dead':
+      case 'lost':
+      case 'dead': return 'Lost/Dead';
+      default: return null;
+    }
+  }
+
+  void _showRatioFormula(String title, String formula) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          title,
+          style: GoogleFonts.inter(fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          formula,
+          style: GoogleFonts.inter(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Close',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: AppTheme.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ─── 2×3 Metrics Grid ─────────────────────────────────────────────────────
 
   Widget _buildMetricsGrid() {
@@ -403,6 +581,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
         iconName: 'people',
         iconColor: AppTheme.primary,
         iconBgColor: AppTheme.primaryContainer,
+        isTappableLink: true,
+        onTap: () {
+          _navigateToMyLeads(
+            title: 'Total Leads',
+            allowedLeadIds: _filteredLeads.map((l) => l.id).toList(),
+          );
+        },
       ),
       ReportMetricCard(
         label: 'Total Site Visits Completed',
@@ -410,6 +595,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
         iconName: 'location_on',
         iconColor: AppTheme.purple,
         iconBgColor: AppTheme.purpleContainer,
+        isTappableLink: true,
+        onTap: () {
+          final allowedIds = _filteredVisits
+              .where((v) => v.status.toLowerCase() == 'completed' || v.status.toLowerCase() == 'done')
+              .map((v) => v.leadId)
+              .toSet()
+              .toList();
+          _navigateToMyLeads(
+            title: 'Site Visit Completed',
+            allowedLeadIds: allowedIds,
+          );
+        },
       ),
       ReportMetricCard(
         label: 'Total Bookings',
@@ -417,6 +614,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
         iconName: 'check_circle',
         iconColor: AppTheme.success,
         iconBgColor: AppTheme.successContainer,
+        isTappableLink: true,
+        onTap: () {
+          final allowedIds = _filteredLeads
+              .where((l) => l.status.toLowerCase() == 'won')
+              .map((l) => l.id)
+              .toList();
+          _navigateToMyLeads(
+            title: 'Total Bookings',
+            allowedLeadIds: allowedIds,
+            filterStatus: 'Won',
+          );
+        },
       ),
       ReportMetricCard(
         label: 'Brokerage Value',
@@ -432,6 +641,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
         iconName: 'trending_up',
         iconColor: AppTheme.teal,
         iconBgColor: AppTheme.tealContainer,
+        onTap: () {
+          _showRatioFormula(
+            'Leads to SV Ratio',
+            'Formula:\nTotal Site Visits Completed ÷ Total Leads × 100',
+          );
+        },
       ),
       ReportMetricCard(
         label: 'SV to Sale Ratio',
@@ -439,6 +654,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
         iconName: 'compare_arrows',
         iconColor: const Color(0xFF6366F1),
         iconBgColor: const Color(0xFFEEF2FF),
+        onTap: () {
+          _showRatioFormula(
+            'SV to Sale Ratio',
+            'Formula:\nTotal Bookings (Sale) ÷ Total Site Visits Completed × 100',
+          );
+        },
       ),
     ];
 

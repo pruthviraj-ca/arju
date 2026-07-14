@@ -53,6 +53,9 @@ class ProjectModel {
   /// List of amenity names (e.g. ['Gym', 'Pool', 'Parking']).
   final List<String> amenities;
 
+  /// Free-text project description / pitch (optional).
+  final String description;
+
   /// ISO 8601 timestamp of when this project was created.
   final String createdAt;
 
@@ -88,6 +91,7 @@ class ProjectModel {
     this.reraNumber = '',
     this.possessionDate = '',
     this.amenities = const [],
+    this.description = '',
     required this.createdAt,
     required this.updatedAt,
   });
@@ -110,6 +114,7 @@ class ProjectModel {
       reraNumber: data['reraNumber'] as String? ?? '',
       possessionDate: data['possessionDate'] as String? ?? '',
       amenities: List<String>.from(data['amenities'] ?? []),
+      description: data['description'] as String? ?? '',
       createdAt: _parseTimestamp(data['createdAt']),
       updatedAt: _parseTimestamp(data['updatedAt']),
     );
@@ -131,6 +136,7 @@ class ProjectModel {
       'reraNumber': reraNumber,
       'possessionDate': possessionDate,
       'amenities': amenities,
+      'description': description,
       'createdAt': createdAt,
       'updatedAt': updatedAt,
     };
@@ -152,6 +158,7 @@ class ProjectModel {
     String? reraNumber,
     String? possessionDate,
     List<String>? amenities,
+    String? description,
     String? createdAt,
     String? updatedAt,
   }) {
@@ -170,6 +177,7 @@ class ProjectModel {
       reraNumber: reraNumber ?? this.reraNumber,
       possessionDate: possessionDate ?? this.possessionDate,
       amenities: amenities ?? this.amenities,
+      description: description ?? this.description,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

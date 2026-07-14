@@ -11,6 +11,7 @@ import '../../services/firestore_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_navigation.dart';
 import '../../widgets/custom_icon_widget.dart';
+import '../../utils/phone_utils.dart';
 
 class SiteVisitsScreen extends StatefulWidget {
   const SiteVisitsScreen({super.key});
@@ -250,6 +251,7 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
         newStatus: 'site visit done',
         triggeredBy: 'site_visit_completed',
         clientName: clientName,
+        logStatusChange: false,
       );
 
       await FirestoreService.instance.updateLeadTemperature(
@@ -266,15 +268,6 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
         text: '$clientName completed site visit',
         tag: 'Site Visit Completed',
       );
-
-      if (currentTemp != targetTemp) {
-        await FirestoreService.instance.logTemperatureChange(
-          leadId: leadId,
-          clientName: clientName,
-          oldTemp: currentTemp,
-          newTemp: targetTemp,
-        );
-      }
       
       _handleRefresh();
 
@@ -348,6 +341,7 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
         newStatus: 'called',
         triggeredBy: 'site_visit_missed',
         clientName: clientName,
+        logStatusChange: false,
       );
       await _addAutoLogNote(
         leadId: leadId,
@@ -418,6 +412,7 @@ class _SiteVisitsScreenState extends State<SiteVisitsScreen> {
         newStatus: 'site visit scheduled',
         triggeredBy: 'site_visit_rescheduled',
         clientName: clientName,
+        logStatusChange: false,
       );
 
       await _addAutoLogNote(
@@ -806,8 +801,8 @@ class _SiteVisitListCard extends StatelessWidget {
                         child: const Icon(Icons.call, color: AppTheme.success, size: 16),
                       ),
                       onPressed: () async {
-                        final phone = lead!.phone.replaceAll(RegExp(r'[^0-9+]'), '');
-                        final uri = Uri(scheme: 'tel', path: phone);
+                        final formattedPhone = formatPhoneForCall(lead!.phone);
+                        final uri = Uri(scheme: 'tel', path: formattedPhone);
                         if (await canLaunchUrl(uri)) {
                           await launchUrl(uri);
                         }

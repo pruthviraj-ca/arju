@@ -5,11 +5,10 @@ import '../../core/app_export.dart';
 import '../../models/project_model.dart';
 import '../../models/tower_model.dart';
 import '../../models/unit_model.dart';
+import '../../models/registration_stage_model.dart';
 import '../../services/firestore_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/custom_icon_widget.dart';
-import './widgets/availability_summary_widget.dart';
-import './widgets/breakdown_chips_widget.dart';
 import './widgets/unit_edit_sheet.dart';
 
 /// Project detail page showing summary stats, breakdowns, and filterable unit list.
@@ -27,6 +26,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   List<UnitModel> _allUnits = [];
   bool _isLoading = true;
   bool _isAdmin = false;
+  bool _migrationDone = false;
 
   StreamSubscription? _projectSub;
   StreamSubscription? _towersSub;
@@ -34,10 +34,15 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   StreamSubscription? _profileSub;
 
   // Filters
+  String _typeFilter = 'All';
   String _statusFilter = 'All';
   String? _bhkFilter;
   String? _facingFilter;
   String? _towerFilter;
+
+  // Registration stage cache for booked units (unitId -> stages)
+  final Map<String, List<RegistrationStageModel>> _regStagesCache = {};
+  final Map<String, StreamSubscription?> _regStageSubs = {};
 
   bool _initialized = false;
 
@@ -59,8 +64,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   void _startListening() {
     _profileSub = FirestoreService.instance.streamUserProfile().listen((profile) {
       if (mounted) {
-        final role = (profile?['role'] as String? ?? '').toLowerCase();
-        setState(() => _isAdmin = role.contains('co founder') || role.contains('admin'));
+        setState(() => _isAdmin = true);
       }
     });
 
@@ -81,8 +85,45 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
           _allUnits = units;
           _isLoading = false;
         });
+        // Run one-time migration for this project
+        if (!_migrationDone) {
+          _migrationDone = true;
+          FirestoreService.instance.migrateUnitTypesForProject(_projectId!);
+        }
+        // Subscribe to registration stages for booked units
+        _updateRegistrationStageSubs();
       }
     });
+  }
+
+  void _updateRegistrationStageSubs() {
+    final bookedUnitIds = _allUnits
+        .where((u) => u.availabilityStatus == 'Booked')
+        .map((u) => u.id)
+        .toSet();
+
+    // Subscribe to new booked units
+    for (final uid in bookedUnitIds) {
+      if (!_regStageSubs.containsKey(uid)) {
+        _regStageSubs[uid] = FirestoreService.instance
+            .streamRegistrationStages(_projectId!, uid)
+            .listen((stages) {
+          if (mounted) {
+            setState(() => _regStagesCache[uid] = stages);
+          }
+        });
+      }
+    }
+
+    // Unsubscribe from units no longer booked
+    final toRemove = _regStageSubs.keys
+        .where((uid) => !bookedUnitIds.contains(uid))
+        .toList();
+    for (final uid in toRemove) {
+      _regStageSubs[uid]?.cancel();
+      _regStageSubs.remove(uid);
+      // Keep cache so data is preserved if re-booked
+    }
   }
 
   @override
@@ -91,11 +132,17 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     _towersSub?.cancel();
     _unitsSub?.cancel();
     _profileSub?.cancel();
+    for (final sub in _regStageSubs.values) {
+      sub?.cancel();
+    }
     super.dispose();
   }
 
   List<UnitModel> get _filteredUnits {
     return _allUnits.where((u) {
+      // Type filter
+      if (_typeFilter != 'All' && u.unitType != _typeFilter) return false;
+      // Status filter
       if (_statusFilter != 'All' && u.availabilityStatus != _statusFilter) return false;
       if (_bhkFilter != null && u.bhkType != _bhkFilter) return false;
       if (_facingFilter != null && u.facing != _facingFilter) return false;
@@ -104,22 +151,18 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     }).toList();
   }
 
-  Map<String, int> get _facingBreakdown {
-    final available = _allUnits.where((u) => u.availabilityStatus == 'Available');
-    final map = <String, int>{};
-    for (final u in available) {
-      map[u.facing] = (map[u.facing] ?? 0) + 1;
-    }
-    return map;
+
+
+  // ─── Count helpers for filter chips ────────────────────────────────────────
+
+  int _countByType(String type) {
+    if (type == 'All') return _allUnits.length;
+    return _allUnits.where((u) => u.unitType == type).length;
   }
 
-  Map<String, int> get _bhkBreakdown {
-    final available = _allUnits.where((u) => u.availabilityStatus == 'Available');
-    final map = <String, int>{};
-    for (final u in available) {
-      map[u.bhkType] = (map[u.bhkType] ?? 0) + 1;
-    }
-    return map;
+  int _countByStatus(String status) {
+    if (status == 'All') return _allUnits.length;
+    return _allUnits.where((u) => u.availabilityStatus == status).length;
   }
 
   String _getTowerName(String? towerId) {
@@ -133,10 +176,16 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       case 'Available': return AppTheme.success;
       case 'Booked': return AppTheme.statusCalled;
       case 'Sold': return AppTheme.mutedText;
+      case 'Hold': return AppTheme.accent;
+      default: return AppTheme.mutedText;
+    }
+  }
+
+  Color _getTypeColor(String type) {
+    switch (type) {
+      case 'Fresh': return AppTheme.teal;
       case 'Resale': return AppTheme.warning;
       case 'Rental': return AppTheme.purple;
-      case 'Blocked':
-      case 'Hold': return AppTheme.accent;
       default: return AppTheme.mutedText;
     }
   }
@@ -163,13 +212,6 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
     final p = _project!;
     final filtered = _filteredUnits;
-    final available = _allUnits.where((u) => u.availabilityStatus == 'Available').length;
-    final resale = _allUnits.where((u) => u.availabilityStatus == 'Resale').length;
-    final rental = _allUnits.where((u) => u.availabilityStatus == 'Rental').length;
-    final booked = _allUnits.where((u) => u.availabilityStatus == 'Booked').length;
-    final hold = _allUnits.where((u) =>
-        u.availabilityStatus == 'Hold' || u.availabilityStatus == 'Blocked').length;
-    final sold = _allUnits.where((u) => u.availabilityStatus == 'Sold').length;
 
     // Get unique BHK types and facings for filter dropdowns
     final uniqueBhks = _allUnits.map((u) => u.bhkType).toSet().toList()..sort();
@@ -208,6 +250,43 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                 arguments: {'project': p},
               ),
               tooltip: 'Edit Project',
+            ),
+          if (_isAdmin)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: AppTheme.primary, size: 22),
+              onSelected: (value) {
+                if (value == 'edit') {
+                  Navigator.pushNamed(
+                    context,
+                    AppRoutes.addProjectScreen,
+                    arguments: {'project': p},
+                  );
+                } else if (value == 'delete') {
+                  _confirmDeleteProject(p);
+                }
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: 'edit',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.edit_outlined, size: 18, color: AppTheme.primary),
+                      const SizedBox(width: 8),
+                      Text('Edit Project', style: GoogleFonts.inter(fontSize: 13)),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.delete_outline, size: 18, color: AppTheme.error),
+                      const SizedBox(width: 8),
+                      Text('Delete Project', style: GoogleFonts.inter(fontSize: 13, color: AppTheme.error)),
+                    ],
+                  ),
+                ),
+              ],
             ),
         ],
         bottom: PreferredSize(
@@ -274,61 +353,98 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
               ),
               const SizedBox(height: 16),
 
-              // ── Availability Summary ──
-              Text('Availability Summary', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.darkText)),
-              const SizedBox(height: 8),
-              AvailabilitySummaryWidget(
-                available: available,
-                resale: resale,
-                rental: rental,
-                booked: booked,
-                hold: hold,
-                sold: sold,
-              ),
-              const SizedBox(height: 16),
+              // ── About this Project ──
+              if (p.description.isNotEmpty) ...[
+                _AboutProjectSection(description: p.description),
+                const SizedBox(height: 16),
+              ],
 
-              // ── Breakdowns ──
-              BreakdownChipsWidget(
-                title: 'Available by Facing',
-                breakdown: _facingBreakdown,
-                chipColor: AppTheme.teal,
-              ),
-              const SizedBox(height: 12),
-              BreakdownChipsWidget(
-                title: 'Available by BHK',
-                breakdown: _bhkBreakdown,
-                chipColor: AppTheme.primary,
-              ),
-              const SizedBox(height: 20),
-
-              // ── Filters ──
-              Text('Units', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.darkText)),
-              const SizedBox(height: 8),
-              // Status filter chips
+              // ── FILTER ROW 1: Unit Type ──
+              Text('Unit Type', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.mutedText)),
+              const SizedBox(height: 6),
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
-                  children: ['All', ...UnitModel.availabilityStatuses].map((s) {
-                    final isActive = s == _statusFilter;
+                  children: ['All', ...UnitModel.unitTypes].map((t) {
+                    final isActive = t == _typeFilter;
+                    final count = _countByType(t);
                     return Padding(
                       padding: const EdgeInsets.only(right: 6),
                       child: FilterChip(
-                        label: Text(s),
+                        label: Text(t == 'All' ? 'All ($count)' : '$t ($count)'),
                         selected: isActive,
-                        onSelected: (_) => setState(() => _statusFilter = s),
-                        selectedColor: AppTheme.primaryContainer,
+                        onSelected: (_) => setState(() => _typeFilter = t),
+                        selectedColor: t == 'All'
+                            ? AppTheme.primaryContainer
+                            : _getTypeColor(t).withAlpha(30),
                         labelStyle: GoogleFonts.inter(
                           fontSize: 11,
                           fontWeight: isActive ? FontWeight.w700 : FontWeight.w400,
-                          color: isActive ? AppTheme.primary : AppTheme.darkText,
+                          color: isActive
+                              ? (t == 'All' ? AppTheme.primary : _getTypeColor(t))
+                              : AppTheme.darkText,
                         ),
                       ),
                     );
                   }).toList(),
                 ),
               ),
+              const SizedBox(height: 10),
+
+              // ── FILTER ROW 2: Unit Status ──
+              Text('Unit Status', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.mutedText)),
+              const SizedBox(height: 6),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: ['All', ...UnitModel.availabilityStatuses].map((s) {
+                    final isActive = s == _statusFilter;
+                    final count = _countByStatus(s);
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: FilterChip(
+                        label: Text(s == 'All' ? 'All ($count)' : '$s ($count)'),
+                        selected: isActive,
+                        onSelected: (_) => setState(() => _statusFilter = s),
+                        selectedColor: s == 'All'
+                            ? AppTheme.primaryContainer
+                            : _getStatusColor(s).withAlpha(30),
+                        labelStyle: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: isActive ? FontWeight.w700 : FontWeight.w400,
+                          color: isActive
+                              ? (s == 'All' ? AppTheme.primary : _getStatusColor(s))
+                              : AppTheme.darkText,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // ── Units Header + Add ──
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('Units', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.darkText)),
+                  ),
+                  if (_isAdmin)
+                    TextButton.icon(
+                      onPressed: () => _showAddUnitSheet(p),
+                      icon: const Icon(Icons.add, size: 16),
+                      label: Text('Add Unit', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppTheme.primary,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                ],
+              ),
               const SizedBox(height: 8),
-              // Secondary filters
+              // Secondary filters (BHK, Facing, Tower)
               Row(
                 children: [
                   Expanded(
@@ -389,7 +505,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String?>(
           value: value,
-          hint: Text(hint, style: GoogleFonts.inter(fontSize: 11, color: AppTheme.mutedText)),
+          hint: Text('All $hint', style: GoogleFonts.inter(fontSize: 11, color: AppTheme.mutedText)),
           isExpanded: true,
           icon: const Icon(Icons.keyboard_arrow_down, size: 16),
           items: [
@@ -414,22 +530,20 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
   Widget _buildUnitRow(UnitModel u) {
     final statusColor = _getStatusColor(u.availabilityStatus);
+    final typeColor = _getTypeColor(u.unitType);
     final towerName = _getTowerName(u.towerId);
 
+    // Registration stages for booked units
+    final stages = _regStagesCache[u.id] ?? [];
+    final completedStages = stages.where((s) => s.isCompleted).length;
+    final lastCompleted = stages.where((s) => s.isCompleted).toList();
+    final lastStageName = lastCompleted.isNotEmpty
+        ? lastCompleted.last.stageName
+        : null;
+
     return GestureDetector(
-      onTap: () {
-        showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (_) => UnitEditSheet(
-            unit: u,
-            projectId: _projectId!,
-            isAdmin: _isAdmin,
-            towerName: towerName.isNotEmpty ? towerName : null,
-          ),
-        );
-      },
+      onTap: () => _showEditUnitSheet(u, towerName),
+      onLongPress: () => _showChangeStatusSheet(u),
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -438,26 +552,21 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: AppTheme.borderColor),
         ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Unit info
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            // LINE 1: [Flat No.]  Tower X               [Price]
+            Row(
+              children: [
+                Expanded(
+                  child: Row(
                     children: [
                       Text(
                         u.unitNumber,
                         style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.darkText),
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'F${u.floorNumber}',
-                        style: GoogleFonts.inter(fontSize: 11, color: AppTheme.mutedText),
-                      ),
                       if (towerName.isNotEmpty) ...[
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 8),
                         Text(
                           towerName,
                           style: GoogleFonts.inter(fontSize: 11, color: AppTheme.mutedText),
@@ -465,23 +574,72 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                       ],
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${u.bhkType} · ${u.facing} · ${u.superBuiltupArea.toStringAsFixed(0)} sqft',
-                    style: GoogleFonts.inter(fontSize: 11, color: AppTheme.mutedText),
-                  ),
-                ],
-              ),
-            ),
-            // Price + status
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
+                ),
                 Text(
-                  u.formattedPrice,
+                  u.displayPrice,
                   style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.darkText),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, size: 18, color: AppTheme.mutedText),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onSelected: (val) {
+                    if (val == 'edit') {
+                      _showEditUnitSheet(u, towerName);
+                    } else if (val == 'status') {
+                      _showChangeStatusSheet(u);
+                    } else if (val == 'delete') {
+                      _confirmDeleteUnit(u);
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: 'edit',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.edit_outlined, size: 16, color: AppTheme.primary),
+                          const SizedBox(width: 8),
+                          Text('Edit', style: GoogleFonts.inter(fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'status',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.swap_horiz, size: 16, color: AppTheme.accent),
+                          const SizedBox(width: 8),
+                          Text('Change Status', style: GoogleFonts.inter(fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.delete_outline, size: 16, color: AppTheme.error),
+                          const SizedBox(width: 8),
+                          Text('Delete', style: GoogleFonts.inter(fontSize: 12, color: AppTheme.error)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+
+            // LINE 2: [N]BHK · [Facing] · [SBA] sqft · [Furnishing]   [Status badge]
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${u.bhkType} · ${u.facing} · ${u.superBuiltupArea.toStringAsFixed(0)} sqft · ${u.furnishing}',
+                    style: GoogleFonts.inter(fontSize: 11, color: AppTheme.mutedText),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
@@ -496,8 +654,341 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 4),
+
+            // LINE 3: Type-specific info
+            Row(
+              children: [
+                // Type chip
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: typeColor.withAlpha(20),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: typeColor.withAlpha(60)),
+                  ),
+                  child: Text(
+                    u.unitType,
+                    style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.w700, color: typeColor),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Type-specific details
+                if (u.unitType == 'Resale' && u.ownerName.isNotEmpty)
+                  Expanded(
+                    child: Text(
+                      '👤 ${u.ownerName}  📞 ${u.ownerPhone}  Ask: ${u.formattedAskingPrice}',
+                      style: GoogleFonts.inter(fontSize: 10, color: AppTheme.warning),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  )
+                else if (u.unitType == 'Rental' && u.landlordName.isNotEmpty)
+                  Expanded(
+                    child: Text(
+                      '👤 ${u.landlordName}  📞 ${u.landlordPhone}  ${u.formattedRent}',
+                      style: GoogleFonts.inter(fontSize: 10, color: AppTheme.purple),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: Text(
+                      '🚗 ${u.carParking}  🛁 ${u.bathrooms} baths',
+                      style: GoogleFonts.inter(fontSize: 10, color: AppTheme.mutedText),
+                    ),
+                  ),
+              ],
+            ),
+
+            // LINE 4: Registration progress (Booked units only)
+            if (u.availabilityStatus == 'Booked' && stages.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Text(
+                    '📋 Registration: ',
+                    style: GoogleFonts.inter(fontSize: 10, color: AppTheme.statusCalled),
+                  ),
+                  Expanded(
+                    child: Text(
+                      lastStageName != null
+                          ? '$lastStageName ✓ · $completedStages/${stages.length}'
+                          : '0/${stages.length} complete',
+                      style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: AppTheme.statusCalled),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  void _showEditUnitSheet(UnitModel u, String towerName) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => UnitEditSheet(
+        unit: u,
+        projectId: _projectId!,
+        isAdmin: _isAdmin,
+        towerName: towerName.isNotEmpty ? towerName : null,
+      ),
+    );
+  }
+
+  void _showChangeStatusSheet(UnitModel u) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Change Status - ${u.unitNumber}',
+              style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.darkText),
+            ),
+            const SizedBox(height: 16),
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 2.8,
+              children: [
+                _statusChip(u, 'Available', '✅ Available', AppTheme.success),
+                _statusChip(u, 'Booked', '📋 Booked', AppTheme.statusCalled),
+                _statusChip(u, 'Hold', '🔒 Hold', AppTheme.accent),
+                _statusChip(u, 'Sold', '❌ Sold', AppTheme.mutedText),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _statusChip(UnitModel u, String status, String label, Color color) {
+    final isSelected = u.availabilityStatus == status;
+    return InkWell(
+      onTap: () async {
+        Navigator.pop(context);
+        await FirestoreService.instance.updateUnit(
+          _projectId!,
+          u.id,
+          {
+            'availability_status': status,
+            'availabilityStatus': status,
+            'updatedAt': DateTime.now().toIso8601String(),
+          },
+        );
+        // Initialize registration stages when first set to Booked
+        if (status == 'Booked') {
+          await FirestoreService.instance.initializeRegistrationStages(
+            _projectId!, u.id,
+          );
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppTheme.success,
+              content: Text('Status of ${u.unitNumber} updated to $status'),
+            ),
+          );
+        }
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected ? color.withAlpha(30) : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color, width: isSelected ? 2.5 : 1),
+        ),
+        child: Text(
+          label,
+          style: GoogleFonts.inter(
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+            color: color,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _confirmDeleteUnit(UnitModel u) {
+    final isBooked = u.availabilityStatus == 'Booked';
+    final hasLead = u.bookingLeadId != null && u.bookingLeadId!.isNotEmpty;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete unit ${u.unitNumber}?', style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'This cannot be undone.',
+              style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
+            ),
+            if (isBooked && hasLead) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.error.withAlpha(15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.error.withAlpha(40)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded, color: AppTheme.error, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This unit is currently booked and linked to a lead. Deleting it will remove the booking association.',
+                        style: GoogleFonts.inter(fontSize: 12, color: AppTheme.error),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel', style: GoogleFonts.inter(color: AppTheme.mutedText)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await FirestoreService.instance.deleteUnit(_projectId!, u.id);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: AppTheme.success,
+                    content: Text('Unit ${u.unitNumber} deleted'),
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error, foregroundColor: Colors.white),
+            child: Text('Delete', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Delete Project Confirmation ──────────────────────────────────────────────
+  void _confirmDeleteProject(ProjectModel project) {
+    final bookedCount = _allUnits.where((u) => u.availabilityStatus == 'Booked').length;
+    final totalCount = _allUnits.length;
+
+    showDialog(
+      context: context,
+      builder: (ctx1) => AlertDialog(
+        title: Text('Delete ${project.name}?', style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 16)),
+        content: Text(
+          'All $totalCount unit${totalCount == 1 ? '' : 's'} will also be deleted. This cannot be undone.',
+          style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx1),
+            child: Text('Cancel', style: GoogleFonts.inter(color: AppTheme.mutedText)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx1);
+              if (bookedCount > 0) {
+                _showSecondDeleteWarning(project, bookedCount);
+              } else {
+                _executeDeleteProject(project);
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error, foregroundColor: Colors.white),
+            child: Text('Delete', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSecondDeleteWarning(ProjectModel project, int bookedCount) {
+    showDialog(
+      context: context,
+      builder: (ctx2) => AlertDialog(
+        title: Text('Warning', style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 16, color: AppTheme.error)),
+        content: Text(
+          '$bookedCount unit${bookedCount == 1 ? '' : 's'} are booked and linked to leads. Deleting will remove all bookings. Continue?',
+          style: GoogleFonts.inter(fontSize: 13, color: AppTheme.darkText),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx2),
+            child: Text('Cancel', style: GoogleFonts.inter(color: AppTheme.mutedText)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx2);
+              _executeDeleteProject(project);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error, foregroundColor: Colors.white),
+            child: Text('Continue', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _executeDeleteProject(ProjectModel project) async {
+    try {
+      await FirestoreService.instance.deleteProjectWithChildren(_projectId!);
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.inventoryScreen, (r) => false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: AppTheme.success,
+            content: Text('Project "${project.name}" deleted',
+                style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: AppTheme.error, content: Text('Error: $e')),
+        );
+      }
+    }
+  }
+
+  // ─── Add Unit Bottom Sheet ───────────────────────────────────────────────────
+  void _showAddUnitSheet(ProjectModel project) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _AddUnitSheet(
+        projectId: _projectId!,
+        towers: _towers,
       ),
     );
   }
@@ -517,6 +1008,605 @@ class _InfoChip extends StatelessWidget {
         const SizedBox(width: 4),
         Text(label, style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.mutedText)),
       ],
+    );
+  }
+}
+
+/// Collapsible "About this Project" section.
+class _AboutProjectSection extends StatefulWidget {
+  final String description;
+  const _AboutProjectSection({required this.description});
+
+  @override
+  State<_AboutProjectSection> createState() => _AboutProjectSectionState();
+}
+
+class _AboutProjectSectionState extends State<_AboutProjectSection> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.borderColor),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, size: 16, color: AppTheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'About this Project',
+                    style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.darkText),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    _expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    size: 20,
+                    color: AppTheme.mutedText,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              child: Text(
+                widget.description,
+                style: GoogleFonts.inter(fontSize: 12, color: AppTheme.darkText, height: 1.5),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet for adding a new unit to a project.
+class _AddUnitSheet extends StatefulWidget {
+  final String projectId;
+  final List<TowerModel> towers;
+  const _AddUnitSheet({required this.projectId, required this.towers});
+
+  @override
+  State<_AddUnitSheet> createState() => _AddUnitSheetState();
+}
+
+class _AddUnitSheetState extends State<_AddUnitSheet> {
+  final _flatNoCtrl = TextEditingController();
+  final _sbaCtrl = TextEditingController();
+  final _priceCtrl = TextEditingController();
+  final _notesCtrl = TextEditingController();
+  int _floor = 1;
+  String _bhkType = '3BHK';
+  String _facing = 'East';
+  int _bedrooms = 2;
+  int _bathrooms = 2;
+  String _furnishing = 'Unfurnished';
+  String _carParking = 'None';
+  String _status = 'Available';
+  String _unitType = 'Fresh';
+  String? _towerId;
+  bool _isSaving = false;
+
+  // Resale fields
+  final _ownerNameCtrl = TextEditingController();
+  final _ownerPhoneCtrl = TextEditingController();
+  final _ownerAskingPriceCtrl = TextEditingController();
+  final _listedPriceCtrl = TextEditingController();
+  final _ownerNotesCtrl = TextEditingController();
+
+  // Rental fields
+  final _landlordNameCtrl = TextEditingController();
+  final _landlordPhoneCtrl = TextEditingController();
+  final _monthlyRentCtrl = TextEditingController();
+  final _securityDepositCtrl = TextEditingController();
+  final _landlordNotesCtrl = TextEditingController();
+  DateTime? _availableFrom;
+
+  @override
+  void dispose() {
+    _flatNoCtrl.dispose();
+    _sbaCtrl.dispose();
+    _priceCtrl.dispose();
+    _notesCtrl.dispose();
+    _ownerNameCtrl.dispose();
+    _ownerPhoneCtrl.dispose();
+    _ownerAskingPriceCtrl.dispose();
+    _listedPriceCtrl.dispose();
+    _ownerNotesCtrl.dispose();
+    _landlordNameCtrl.dispose();
+    _landlordPhoneCtrl.dispose();
+    _monthlyRentCtrl.dispose();
+    _securityDepositCtrl.dispose();
+    _landlordNotesCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_flatNoCtrl.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: AppTheme.error, content: Text('Flat No. is required', style: GoogleFonts.inter(color: Colors.white))),
+      );
+      return;
+    }
+    if (_priceCtrl.text.trim().isEmpty && _unitType != 'Rental') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: AppTheme.error, content: Text('Price is required', style: GoogleFonts.inter(color: Colors.white))),
+      );
+      return;
+    }
+    // Tower validation: require selection when towers exist
+    if (widget.towers.isNotEmpty && _towerId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: AppTheme.error, content: Text('Please select a Tower / Block', style: GoogleFonts.inter(color: Colors.white))),
+      );
+      return;
+    }
+    // Resale validation
+    if (_unitType == 'Resale') {
+      if (_ownerNameCtrl.text.trim().isEmpty || _ownerPhoneCtrl.text.trim().isEmpty || _ownerAskingPriceCtrl.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: AppTheme.error, content: Text('Owner Name, Phone, and Asking Price are required for Resale', style: GoogleFonts.inter(color: Colors.white))),
+        );
+        return;
+      }
+    }
+    // Rental validation
+    if (_unitType == 'Rental') {
+      if (_landlordNameCtrl.text.trim().isEmpty || _landlordPhoneCtrl.text.trim().isEmpty || _monthlyRentCtrl.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: AppTheme.error, content: Text('Landlord Name, Phone, and Monthly Rent are required for Rental', style: GoogleFonts.inter(color: Colors.white))),
+        );
+        return;
+      }
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      final now = DateTime.now().toIso8601String();
+      final sba = double.tryParse(_sbaCtrl.text.trim()) ?? 0.0;
+      final totalPrice = double.tryParse(_priceCtrl.text.trim()) ?? 0.0;
+      final unit = UnitModel(
+        id: '',
+        projectId: widget.projectId,
+        towerId: _towerId,
+        unitNumber: _flatNoCtrl.text.trim(),
+        floorNumber: _floor,
+        bhkType: _bhkType,
+        facing: _facing,
+        superBuiltupArea: sba,
+        bedrooms: _bedrooms,
+        bathrooms: _bathrooms,
+        basePricePerSqft: sba > 0 ? totalPrice / sba : 0,
+        totalPrice: totalPrice,
+        furnishing: _furnishing,
+        carParking: _carParking,
+        availabilityStatus: _status,
+        unitType: _unitType,
+        notes: _notesCtrl.text.trim(),
+        createdAt: now,
+        updatedAt: now,
+        // Resale
+        ownerName: _unitType == 'Resale' ? _ownerNameCtrl.text.trim() : '',
+        ownerPhone: _unitType == 'Resale' ? _ownerPhoneCtrl.text.trim() : '',
+        ownerAskingPrice: _unitType == 'Resale' ? (double.tryParse(_ownerAskingPriceCtrl.text.trim()) ?? 0.0) : 0.0,
+        listedPrice: _unitType == 'Resale' ? (double.tryParse(_listedPriceCtrl.text.trim()) ?? 0.0) : 0.0,
+        ownerNotes: _unitType == 'Resale' ? _ownerNotesCtrl.text.trim() : '',
+        // Rental
+        landlordName: _unitType == 'Rental' ? _landlordNameCtrl.text.trim() : '',
+        landlordPhone: _unitType == 'Rental' ? _landlordPhoneCtrl.text.trim() : '',
+        monthlyRent: _unitType == 'Rental' ? (double.tryParse(_monthlyRentCtrl.text.trim()) ?? 0.0) : 0.0,
+        securityDeposit: _unitType == 'Rental' ? (double.tryParse(_securityDepositCtrl.text.trim()) ?? 0.0) : 0.0,
+        availableFrom: _unitType == 'Rental' && _availableFrom != null ? _availableFrom!.toIso8601String() : '',
+        landlordNotes: _unitType == 'Rental' ? _landlordNotesCtrl.text.trim() : '',
+      );
+      final unitId = await FirestoreService.instance.addUnit(widget.projectId, unit);
+      // Initialize registration stages if adding as Booked
+      if (_status == 'Booked') {
+        await FirestoreService.instance.initializeRegistrationStages(widget.projectId, unitId);
+      }
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: AppTheme.success,
+            content: Text('Unit ${_flatNoCtrl.text.trim()} added',
+                style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isSaving = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: AppTheme.error, content: Text('Error: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.only(
+        left: 20, right: 20, top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.9,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Center(
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(color: AppTheme.borderColor, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text('Add New Unit', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700, color: AppTheme.darkText)),
+            const SizedBox(height: 16),
+
+            // ── Unit Type Selector ──
+            Text('Unit Type', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.darkText)),
+            const SizedBox(height: 8),
+            Row(
+              children: UnitModel.unitTypes.map((t) {
+                final isActive = t == _unitType;
+                final color = t == 'Fresh' ? AppTheme.teal : t == 'Resale' ? AppTheme.warning : AppTheme.purple;
+                return Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(right: t != UnitModel.unitTypes.last ? 8 : 0),
+                    child: InkWell(
+                      onTap: () => setState(() => _unitType = t),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: isActive ? color.withAlpha(20) : Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: isActive ? color : AppTheme.borderColor, width: isActive ? 2 : 1),
+                        ),
+                        child: Text(
+                          t,
+                          style: GoogleFonts.inter(fontSize: 12, fontWeight: isActive ? FontWeight.w700 : FontWeight.w500, color: isActive ? color : AppTheme.darkText),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 16),
+
+            // Flat No + Floor
+            Row(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: TextFormField(
+                    controller: _flatNoCtrl,
+                    textCapitalization: TextCapitalization.characters,
+                    style: GoogleFonts.inter(fontSize: 13),
+                    decoration: _inputDec('Flat No. *'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    initialValue: '$_floor',
+                    keyboardType: TextInputType.number,
+                    style: GoogleFonts.inter(fontSize: 13),
+                    decoration: _inputDec('Floor'),
+                    onChanged: (v) => _floor = int.tryParse(v) ?? _floor,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // BHK + Facing
+            Row(
+              children: [
+                Expanded(
+                  child: _miniDropdown('BHK Type', _bhkType, UnitModel.bhkTypes, (v) => setState(() => _bhkType = v!)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _miniDropdown('Main Door Facing', _facing, UnitModel.facings, (v) => setState(() => _facing = v!)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // SBA
+            TextFormField(
+              controller: _sbaCtrl,
+              keyboardType: TextInputType.number,
+              style: GoogleFonts.inter(fontSize: 13),
+              decoration: _inputDec('SBA in SqFt'),
+            ),
+            const SizedBox(height: 12),
+            // Bedrooms + Bathrooms
+            Row(
+              children: [
+                Expanded(
+                  child: _miniDropdown('Bedrooms', '$_bedrooms', ['1','2','3','4','5'],
+                      (v) => setState(() => _bedrooms = int.tryParse(v ?? '2') ?? 2)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _miniDropdown('Bathrooms', '$_bathrooms', ['1','2','3','4'],
+                      (v) => setState(() => _bathrooms = int.tryParse(v ?? '2') ?? 2)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Furnishing + Car Parking
+            Row(
+              children: [
+                Expanded(
+                  child: _miniDropdown('Furnishing', _furnishing, UnitModel.furnishingOptions,
+                      (v) => setState(() => _furnishing = v!)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _miniDropdown('Car Parking', _carParking, UnitModel.carParkingOptions,
+                      (v) => setState(() => _carParking = v!)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Tower + Unit Status (always show tower when towers exist)
+            Row(
+              children: [
+                if (widget.towers.isNotEmpty) ...[
+                  Expanded(
+                    child: _miniDropdownNullable(
+                      'Select Tower... *',
+                      _towerId,
+                      widget.towers.map((t) => t.id).toList(),
+                      (v) => setState(() => _towerId = v),
+                      displayMap: {for (var t in widget.towers) t.id: t.towerName},
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  child: _miniDropdown(
+                    'Unit Status',
+                    _status,
+                    UnitModel.availabilityStatuses,
+                    (v) => setState(() => _status = v!),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Total Price
+            TextFormField(
+              controller: _priceCtrl,
+              keyboardType: TextInputType.number,
+              style: GoogleFonts.inter(fontSize: 13),
+              decoration: _inputDec(_unitType == 'Rental' ? 'Total Price (₹)' : 'Total Price (₹) *'),
+            ),
+            const SizedBox(height: 12),
+
+            // ── Resale Owner Details ──
+            if (_unitType == 'Resale') ...[
+              const Divider(color: AppTheme.borderColor),
+              const SizedBox(height: 8),
+              Text('Resale Owner Details', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.warning)),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _ownerNameCtrl,
+                textCapitalization: TextCapitalization.words,
+                style: GoogleFonts.inter(fontSize: 13),
+                decoration: _inputDec('Owner Name *'),
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _ownerPhoneCtrl,
+                keyboardType: TextInputType.phone,
+                style: GoogleFonts.inter(fontSize: 13),
+                decoration: _inputDec('Owner Phone *'),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _ownerAskingPriceCtrl,
+                      keyboardType: TextInputType.number,
+                      style: GoogleFonts.inter(fontSize: 13),
+                      decoration: _inputDec('Owner Asking Price (₹) *'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _listedPriceCtrl,
+                      keyboardType: TextInputType.number,
+                      style: GoogleFonts.inter(fontSize: 13),
+                      decoration: _inputDec('Our Listed Price (₹)'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _ownerNotesCtrl,
+                maxLines: 2,
+                textCapitalization: TextCapitalization.sentences,
+                style: GoogleFonts.inter(fontSize: 13),
+                decoration: _inputDec('Owner Notes').copyWith(
+                  hintText: 'Flexibility, urgency, reason for selling...',
+                  hintStyle: GoogleFonts.inter(fontSize: 12, color: AppTheme.mutedText),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // ── Rental Owner Details ──
+            if (_unitType == 'Rental') ...[
+              const Divider(color: AppTheme.borderColor),
+              const SizedBox(height: 8),
+              Text('Rental Owner Details', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.purple)),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _landlordNameCtrl,
+                textCapitalization: TextCapitalization.words,
+                style: GoogleFonts.inter(fontSize: 13),
+                decoration: _inputDec('Landlord Name *'),
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _landlordPhoneCtrl,
+                keyboardType: TextInputType.phone,
+                style: GoogleFonts.inter(fontSize: 13),
+                decoration: _inputDec('Landlord Phone *'),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _monthlyRentCtrl,
+                      keyboardType: TextInputType.number,
+                      style: GoogleFonts.inter(fontSize: 13),
+                      decoration: _inputDec('Monthly Rent (₹) *'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _securityDepositCtrl,
+                      keyboardType: TextInputType.number,
+                      style: GoogleFonts.inter(fontSize: 13),
+                      decoration: _inputDec('Security Deposit (₹)'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // Available From date picker
+              InkWell(
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _availableFrom ?? DateTime.now(),
+                    firstDate: DateTime.now().subtract(const Duration(days: 30)),
+                    lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
+                  );
+                  if (picked != null) setState(() => _availableFrom = picked);
+                },
+                child: InputDecorator(
+                  decoration: _inputDec('Available From'),
+                  child: Text(
+                    _availableFrom != null
+                        ? '${_availableFrom!.day}/${_availableFrom!.month}/${_availableFrom!.year}'
+                        : 'Select date...',
+                    style: GoogleFonts.inter(fontSize: 13, color: _availableFrom != null ? AppTheme.darkText : AppTheme.mutedText),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _landlordNotesCtrl,
+                maxLines: 2,
+                textCapitalization: TextCapitalization.sentences,
+                style: GoogleFonts.inter(fontSize: 13),
+                decoration: _inputDec('Landlord Notes').copyWith(
+                  hintText: 'Restrictions, preferences...',
+                  hintStyle: GoogleFonts.inter(fontSize: 12, color: AppTheme.mutedText),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // Notes
+            TextFormField(
+              controller: _notesCtrl,
+              maxLines: 2,
+              textCapitalization: TextCapitalization.sentences,
+              style: GoogleFonts.inter(fontSize: 13),
+              decoration: _inputDec('Notes (optional)'),
+            ),
+            const SizedBox(height: 20),
+            // Save
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _isSaving ? null : _save,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.success,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  elevation: 0,
+                ),
+                child: _isSaving
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : Text('Add Unit', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  InputDecoration _inputDec(String label) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: GoogleFonts.inter(fontSize: 13, color: AppTheme.mutedText),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: AppTheme.borderColor),
+      ),
+      filled: true,
+      fillColor: const Color(0xFFF9FAFB),
+    );
+  }
+
+  Widget _miniDropdown(String label, String? value, List<String> items, ValueChanged<String?> onChanged, {Map<String, String>? displayMap}) {
+    return DropdownButtonFormField<String>(
+      value: (value != null && items.contains(value)) ? value : null,
+      hint: Text(label, style: GoogleFonts.inter(fontSize: 12, color: AppTheme.mutedText)),
+      items: items.map((i) => DropdownMenuItem(value: i, child: Text(displayMap?[i] ?? i, style: GoogleFonts.inter(fontSize: 12)))).toList(),
+      onChanged: onChanged,
+      isExpanded: true,
+      decoration: _inputDec(label),
+    );
+  }
+
+  /// Dropdown that starts with null (no default selected), for tower selection.
+  Widget _miniDropdownNullable(String placeholder, String? value, List<String> items, ValueChanged<String?> onChanged, {Map<String, String>? displayMap}) {
+    return DropdownButtonFormField<String>(
+      value: (value != null && items.contains(value)) ? value : null,
+      hint: Text(placeholder, style: GoogleFonts.inter(fontSize: 12, color: AppTheme.mutedText)),
+      items: items.map((i) => DropdownMenuItem(value: i, child: Text(displayMap?[i] ?? i, style: GoogleFonts.inter(fontSize: 12)))).toList(),
+      onChanged: onChanged,
+      isExpanded: true,
+      decoration: _inputDec('Tower / Block *'),
     );
   }
 }

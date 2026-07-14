@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_theme.dart';
 import '../services/twilio_voice_service.dart';
+import '../utils/phone_utils.dart';
 
 /// Data returned when the dialer closes after a call ends.
 class DialerResult {
@@ -156,16 +157,16 @@ class _InAppDialerOverlayState extends State<_InAppDialerOverlay>
   /// tracking call duration so the agent can log it.
   Future<void> _launchNativeCall() async {
     final phone = widget.lead['phone'] as String? ?? '';
-    final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    final formattedPhone = formatPhoneForCall(phone);
 
-    if (cleanPhone.isEmpty) {
+    if (formattedPhone.replaceAll('+91', '').isEmpty) {
       if (mounted) {
         setState(() => _errorMessage = 'No phone number available');
       }
       return;
     }
 
-    final uri = Uri(scheme: 'tel', path: cleanPhone);
+    final uri = Uri(scheme: 'tel', path: formattedPhone);
 
     try {
       final launched = await launchUrl(

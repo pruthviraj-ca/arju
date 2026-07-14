@@ -9,6 +9,8 @@ import '../../widgets/app_navigation.dart';
 import '../../models/lead_model.dart';
 import '../../services/firestore_service.dart';
 import '../../routes/app_routes.dart';
+import '../../services/auth_service.dart';
+import 'package:flutter/services.dart';
 
 class ImportLeadsScreen extends StatefulWidget {
   const ImportLeadsScreen({super.key});
@@ -838,7 +840,13 @@ class _ImportLeadsScreenState extends State<ImportLeadsScreen> {
                     width: double.infinity,
                     height: 28,
                     child: ElevatedButton(
-                      onPressed: () => _pickAndParseFile(item['name'] as String),
+                      onPressed: () {
+                        if (item['name'] == 'MagicBricks') {
+                          _showMagicBricksIntegrationDialog();
+                        } else {
+                          _pickAndParseFile(item['name'] as String);
+                        }
+                      },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.primary,
                         foregroundColor: Colors.white,
@@ -858,6 +866,202 @@ class _ImportLeadsScreenState extends State<ImportLeadsScreen> {
           },
         );
       },
+    );
+  }
+
+  void _showMagicBricksIntegrationDialog() {
+    final String projectRegion = 'us-central1';
+    final String projectId = 'truassets-crm-akp-web';
+    final String? agentId = AuthService.instance.currentUser?.uid;
+    final String webhookUrl = 'https://$projectRegion-$projectId.cloudfunctions.net/magicbricksWebhook?agent_id=${agentId ?? "AGENT_UID"}';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+        actionsPadding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: Colors.orange.withAlpha(25),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.home_work_outlined, color: Colors.orange, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'MagicBricks Integration',
+              style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.darkText),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.success.withAlpha(20),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.success.withAlpha(40)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.check_circle_outline, color: AppTheme.success, size: 16),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Direct Webhook Integration (Recommended)',
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.success,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'This is the most professional and real-time method. MagicBricks supports sending an HTTP POST request (a webhook) to a URL of your choice every time a lead is generated.',
+                      style: GoogleFonts.inter(fontSize: 11, color: AppTheme.darkText, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Your Unique Webhook URL:',
+                style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.darkText),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.borderColor),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SelectableText(
+                        webhookUrl,
+                        style: GoogleFonts.robotoMono(fontSize: 10, color: AppTheme.darkText),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    IconButton(
+                      icon: const Icon(Icons.copy, size: 16, color: AppTheme.primary),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: webhookUrl));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppTheme.success,
+                            content: Text('Webhook URL copied to clipboard!', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
+                          ),
+                        );
+                      },
+                      tooltip: 'Copy URL',
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'How to set it up:',
+                style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.darkText),
+              ),
+              const SizedBox(height: 10),
+              _buildStepRow(
+                '1',
+                'Copy the Webhook URL',
+                'Click the copy icon above to copy your unique URL to your clipboard.',
+              ),
+              const SizedBox(height: 10),
+              _buildStepRow(
+                '2',
+                'Share with MagicBricks Support',
+                'Email your MagicBricks Account Manager or support representative and ask them to configure lead deliveries to this URL.',
+              ),
+              const SizedBox(height: 10),
+              _buildStepRow(
+                '3',
+                'Automatic Flow',
+                'Once configured, any lead generated on MagicBricks will automatically stream directly into your CRM list in real-time.',
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                elevation: 0,
+              ),
+              child: Text(
+                'Done',
+                style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepRow(String number, String title, String description) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 18,
+          height: 18,
+          alignment: Alignment.center,
+          decoration: const BoxDecoration(
+            color: AppTheme.primary,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            number,
+            style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.darkText),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                description,
+                style: GoogleFonts.inter(fontSize: 11, color: AppTheme.mutedText, height: 1.3),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
